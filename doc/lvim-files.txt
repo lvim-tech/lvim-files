@@ -1,0 +1,249 @@
+*lvim-files.txt*    One file manager, two presentations, one core
+
+==============================================================================
+CONTENTS                                              *lvim-files*
+
+  1. Introduction ........................... |lvim-files-intro|
+  2. Setup .................................. |lvim-files-setup|
+  3. Command ................................ |lvim-files-command|
+  4. Tree panel ............................. |lvim-files-panel|
+  5. Edit view .............................. |lvim-files-edit|
+  6. Operations engine ...................... |lvim-files-ops|
+  7. Events ................................. |lvim-files-events|
+  8. API .................................... |lvim-files-api|
+  9. Cursor integration ..................... |lvim-files-cursor|
+ 10. Highlights ............................. |lvim-files-highlights|
+
+==============================================================================
+1. INTRODUCTION                                 *lvim-files-intro*
+
+lvim-files is a file manager with two presentations over ONE shared core:
+
+The TREE PANEL is a persistent side split (fixed width, 'winfixwidth'):
+a lazily-loaded asynchronous directory tree with entry icons, git status
+badges (propagated to ancestor directories), per-file diagnostics badges and
+a live filter bar. It carries the full set of file operations and integrates
+with the other lvim-tech plugins (open in a picked window, fuzzy tree jump).
+
+The EDIT VIEW opens a directory as a MODIFIABLE buffer in a centred float:
+editing the text is the file operation. Each line carries its entry's stable
+identity as a hidden extmark; on save the buffer is diffed against that
+identity into an ordered operation list — rename, create, delete, move, copy
+— which is confirmed and applied.
+
+Both presentations share one filesystem model (async |vim.uv| scanning, lazy
+per-directory loading, fs_event watchers refreshing open directories), one
+operations engine (|lvim-files-ops|) and one decoration pipeline.
+
+==============================================================================
+2. SETUP                                        *lvim-files-setup*
+
+Defaults shown; `setup()` merges overrides into the live config.
+>lua
+  require("lvim-files").setup({
+      panel = {
+          width = 34,                -- columns (>1) or a screen fraction (<=1)
+          side = "left",             -- "left" | "right"
+          auto_close_on_open = false,
+          title = "LVIM FILES",      -- winbar title (false = none)
+          keys = {
+              open = { "<CR>", "l" },
+              close_node = "h",
+              open_pick = "o",
+              add = "a",
+              rename = "r",
+              delete = "d",
+              copy = "c",
+              cut = "x",
+              paste = "p",
+              copy_path = "y",
+              root_up = "-",
+              root_cwd = "~",
+              find = "/",
+              toggle_dotfiles = ".",
+              toggle_gitignore = "H",
+              refresh = "R",
+              edit_mode = "e",
+              help = "?",
+              close = "q",
+          },
+      },
+      edit = {
+          confirm = true,            -- op-list confirm panel before applying
+          trash = true,              -- delete to trash (gio) when available
+          keys = {
+              go_in = { "<CR>", "l" },
+              go_out = "h",
+              synchronize = "=",     -- also plain :w
+              close = "q",
+          },
+      },
+      filters = {
+          dotfiles = true,           -- show dotfiles on open
+          gitignore = true,          -- show git-ignored entries on open
+      },
+      git = {
+          enabled = true,
+          debounce = 150,            -- ms coalescing git status refreshes
+      },
+      diagnostics = true,
+      hijack_netrw = false,          -- directory buffers open the edit view
+      lsp_rename = true,             -- workspace/willRenameFiles first
+      icons = { ... },               -- every glyph (see README for the full map)
+  })
+<
+==============================================================================
+3. COMMAND                                      *lvim-files-command* *:LvimFiles*
+
+>
+  :LvimFiles                  toggle the tree panel
+  :LvimFiles panel [dir]      toggle the tree panel (rooted at [dir])
+  :LvimFiles focus            focus the panel (opening it if needed)
+  :LvimFiles close            close the panel and the edit view
+  :LvimFiles edit [dir]       open the edit view
+<
+Subcommands and directory arguments tab-complete.
+
+==============================================================================
+4. TREE PANEL                                   *lvim-files-panel*
+
+A native split pinned to one edge; the buffer filetype is `lvim-files`
+(register it per |lvim-files-cursor|). The in-buffer header carries the root
+path band and the filter bar (two live toggles with counts: dotfiles and
+git-ignored entries; the buttons are mouse-clickable).
+
+Default keys (see `panel.keys`):
+>
+  <CR> / l    expand a directory / open the file
+  h           collapse the directory, or jump to the parent row
+  o           open the file in a window picked via lvim-winpick
+  <C-v>       open the file in a vertical split
+  <C-x>       open the file in a horizontal split
+  <C-t>       open the file in a new tab
+  a           create under the directory (trailing "/" = directory)
+  r           rename
+  d           delete (to trash when enabled + available)
+  c / x / p   mark for copy / mark for cut / paste into the directory
+  y           yank the absolute path
+  - / ~       re-root one directory up / at the cwd
+  /           fuzzy jump to a loaded entry (lvim-picker)
+  . / H       toggle the dotfiles / git-ignored filters
+  R           rescan every loaded directory + git status
+  e           open the EDIT view on the directory under the cursor
+  ?           the keymap cheatsheet
+  q           close the panel
+<
+Entries are decorated with the entry icon (lvim-icons when installed), a
+symlink marker, right-aligned git badges (a directory shows the WORST status
+underneath it) and a max-severity diagnostics badge. Watchers refresh open
+directories automatically; a buffer write refreshes git status.
+
+Opening the panel moves the cursor INTO the tree (`panel.focus_on_open`, default
+true). With `panel.follow` (default true) the tree reveals + selects the current
+buffer's file as you switch windows or buffers, expanding parents as needed.
+`panel.auto_collapse` (opt-in) keeps only ONE branch open — the current file's /
+cursor's — collapsing the others as you move between subtrees. `panel.input` chooses the rename/add prompt ("native" = Neovim vim.ui.input, default; "popup" = the lvim-ui input). `panel.close_if_last`
+(opt-in) closes the tree when it would be left as the last window, so it never
+blocks a quit.
+
+Directories are painted GREEN (a hidden `.dir` a dimmer green); files, symlinks
+and git / diagnostic badges follow the palette. All groups are `LvimFiles*` and
+re-theme on `:colorscheme`.
+
+==============================================================================
+5. EDIT VIEW                                    *lvim-files-edit*
+
+`:LvimFiles edit [dir]` opens the directory as a modifiable buffer in a
+centred float; the border title is the navigation breadcrumb
+(`root ➤ sub ➤ dir`). Each line is `icon name`; the entry identity rides a
+hidden extmark, so the mapping survives renames, reorders and inserts.
+
+Buffer edits become operations on synchronize (`:w` or `=`):
+>
+  change a name              rename
+  delete a line (dd)         delete
+  add a line "name"          create a file
+  add a line "name/"         create a directory (recursive)
+  dd ... navigate ... p      MOVE across directories
+  yy ... p                   COPY (into another directory)
+  swap two names             both renames (cycle-safe via a temp hop)
+<
+`l`/`<CR>` on a directory line re-targets the buffer into it, `h` to the
+parent. Pending edits of every visited directory are kept and applied
+together; closing with unapplied operations asks for confirmation.
+
+With `edit.confirm = true` the ordered operation list is shown in a confirm
+panel first — create rows green, changes yellow, deletes red; conflicting
+operations carry a note and are skipped on apply. `<CR>` applies.
+
+==============================================================================
+6. OPERATIONS ENGINE                            *lvim-files-ops*
+
+Every change from either view funnels through one engine:
+
+- rename/move ask every running LSP client supporting
+  `workspace/willRenameFiles` and apply the returned workspace edits BEFORE
+  the file moves; `workspace/didRenameFiles` is notified after (disable with
+  `lsp_rename = false`);
+- open buffers on a renamed/moved path are re-pointed (and re-read when
+  unmodified); buffers on a deleted path are dropped;
+- deletes use `gio trash` when `edit.trash` is enabled and the tool is
+  available, else remove from disk; a failing trash NEVER falls back to a
+  hard delete;
+- targets are never overwritten — a colliding operation fails with a message.
+
+==============================================================================
+7. EVENTS                                       *lvim-files-events*
+
+Each applied operation fires a |User| autocmd with the paths in `data`:
+>
+  LvimFilesCreate   { path, dir }
+  LvimFilesRename   { from, to }
+  LvimFilesMove     { from, to }
+  LvimFilesCopy     { from, to }
+  LvimFilesDelete   { path, method }
+<
+==============================================================================
+8. API                                          *lvim-files-api*
+
+>lua
+  local files = require("lvim-files")
+  files.setup(opts)        -- merge options into the live config
+  files.open(enter, dir)   -- open the tree panel (enter = focus it)
+  files.close()            -- close the tree panel
+  files.toggle(dir)        -- toggle the tree panel
+  files.focus()            -- focus the panel (opening it if needed)
+  files.reveal(path)       -- expand to + select an absolute path
+  files.edit(dir)          -- open the edit view on a directory
+<
+==============================================================================
+9. CURSOR INTEGRATION                           *lvim-files-cursor*
+
+The panel is a persistent side panel: register its filetype in the
+lvim-utils cursor module's `panel_ft` list so the hardware cursor hides only
+while the panel is the current window:
+>lua
+  require("lvim-utils.cursor").setup({
+      panel_ft = { "lvim-files" },
+  })
+<
+The edit view keeps a visible cursor (it is a real editing buffer).
+
+==============================================================================
+10. HIGHLIGHTS                                  *lvim-files-highlights*
+
+All groups derive from the live lvim-utils palette (re-applied on
+|ColorScheme| and palette sync):
+>
+  LvimFilesDir / File / Symlink / Exec / Cut    entry names
+  LvimFilesRoot                                 the root path band
+  LvimFilesGuide / Fold / Empty                 tree chrome
+  LvimFilesGitAdded / Modified / Deleted /
+      Renamed / Untracked / Ignored / Conflict  git badges
+  LvimFilesDiagError / Warn / Info / Hint       diagnostics badges
+  LvimFilesOpAdd / Change / Delete (+Active)    confirm panel rows
+  LvimFilesOpNote                               conflict notes
+  LvimFilesFilterKey / On / Off                 filter bar buttons
+<
+
+vim:tw=78:ts=8:noet:ft=help:norl:
