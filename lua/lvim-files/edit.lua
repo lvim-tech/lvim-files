@@ -21,6 +21,7 @@ local ops = require("lvim-files.fs.ops")
 local render = require("lvim-files.render")
 local surface = require("lvim-ui.surface")
 local lvim_ui = require("lvim-ui")
+local lvim_cursor = require("lvim-utils.cursor")
 
 local api = vim.api
 
@@ -46,12 +47,38 @@ local state = {
     yanks = {}, ---@type table<string, { path: string, dir: boolean }>  raw line text → source
     opener = nil, ---@type integer|nil      the window the view opened from
     augroup = nil, ---@type integer|nil
+    show_dotfiles = true, ---@type boolean  filter: show entries whose name starts with "."
+    show_gitignore = true, ---@type boolean filter: show git-ignored entries
 }
 
 --- The live edit config.
 ---@return LvimFilesEditConfig
 local function cfg()
     return config.edit
+end
+
+--- Whether a node passes the active dot / gitignore filters. A HIDDEN node is left out of the render AND
+--- the diff base, so `synchronize` never sees it — hidden entries are untouched on disk.
+---@param node LvimFilesNode
+---@return boolean
+local function visible(node)
+    if not state.show_dotfiles and node.name:sub(1, 1) == "." then
+        return false
+    end
+    if not state.show_gitignore and git.is_ignored(node.path) then
+        return false
+    end
+    return true
+end
+
+--- The first configured key label for a mapping (a bar's lead badge).
+---@param lhs string|string[]
+---@return string
+local function key_label(lhs)
+    if type(lhs) == "table" then
+        return lhs[1] or "?"
+    end
+    return lhs or "?"
 end
 
 --- Whether the edit view is open.
@@ -91,6 +118,25 @@ local function read_ids()
     return ids
 end
 
+--- Read the buffer's CURRENT decoration extmarks (NS_HL: icon / name colours) back into the `spans`
+--- shape write_buffer consumes (`line 1-based → { {c0, c1, hl}, … }`), so a snapshot can restore the exact
+--- colours on return — otherwise a snapshot-restored dir clears NS_HL and re-paints nothing (icons go plain).
+---@return table<integer, table[]>
+local function read_spans()
+    local spans = {}
+    if not (state.buf and api.nvim_buf_is_valid(state.buf)) then
+        return spans
+    end
+    for _, m in ipairs(api.nvim_buf_get_extmarks(state.buf, NS_HL, 0, -1, { details = true })) do
+        local row, col, det = m[2] + 1, m[3], m[4]
+        if det and det.hl_group and det.end_col then
+            spans[row] = spans[row] or {}
+            spans[row][#spans[row] + 1] = { col, det.end_col, det.hl_group }
+        end
+    end
+    return spans
+end
+
 --- Snapshot the buffer's pending text for the CURRENT directory (called before leaving it
 --- and before a sync, so every visited dir contributes its edits).
 local function snapshot_current()
@@ -99,7 +145,7 @@ local function snapshot_current()
     end
     local v = state.views[state.dir]
     if v then
-        v.snapshot = { lines = api.nvim_buf_get_lines(state.buf, 0, -1, false), ids = read_ids() }
+        v.snapshot = { lines = api.nvim_buf_get_lines(state.buf, 0, -1, false), ids = read_ids(), spans = read_spans() }
     end
 end
 
@@ -120,6 +166,26 @@ local function breadcrumb(dir)
         end
     end
     return table.concat(segs, " ➤ ")
+end
+
+--- Fit the breadcrumb into `avail` display cells, keeping the TAIL (the current folder) visible: a deep
+--- chain that overflows the panel (already widened to its max) is scrolled — truncated from the LEFT with a
+--- leading ellipsis — so the current directory stays on screen instead of being clipped off the right.
+---@param bc string
+---@param avail integer
+---@return string
+local function fit_title(bc, avail)
+    if avail <= 1 or vim.fn.strdisplaywidth(bc) <= avail then
+        return bc
+    end
+    local chars = vim.fn.strchars(bc)
+    for i = 1, chars - 1 do
+        local suf = vim.fn.strcharpart(bc, i)
+        if vim.fn.strdisplaywidth(suf) <= avail - 1 then -- -1 leaves room for the "…"
+            return "…" .. suf
+        end
+    end
+    return bc
 end
 
 --- Write `lines` (+ identity marks + decorations) into the buffer, resetting undo history —
@@ -156,6 +222,9 @@ local function write_buffer(lines, ids, spans)
     vim.bo[buf].modified = false
 end
 
+---@type fun(counts: { dot: integer, ign: integer }): table   forward decl (defined below, uses the toggles)
+local build_footer
+
 --- Render (or restore) a directory into the buffer and refresh the chrome. `cb` fires after
 --- the content landed (fresh renders scan asynchronously first).
 ---@param dir string
@@ -166,29 +235,56 @@ local function render_dir(dir, cb)
         if not (state.buf and api.nvim_buf_is_valid(state.buf)) then
             return
         end
+        -- Filter-bar counts: how many of THIS dir's entries each filter governs (shown as the badge),
+        -- regardless of whether they are currently shown.
+        local counts = { dot = 0, ign = 0 }
+        for _, ch in ipairs(v.node.children or {}) do
+            if ch.name:sub(1, 1) == "." then
+                counts.dot = counts.dot + 1
+            end
+            if git.is_ignored(ch.path) then
+                counts.ign = counts.ign + 1
+            end
+        end
         if v.snapshot then
-            write_buffer(v.snapshot.lines, v.snapshot.ids)
+            write_buffer(v.snapshot.lines, v.snapshot.ids, v.snapshot.spans)
             vim.bo[state.buf].modified = true -- restored pending edits are still unsaved
             v.snapshot = nil
         else
             local lines, ids, spans = {}, {}, {}
             v.base = {}
-            for i, ch in ipairs(v.node.children or {}) do
-                local line, ss = render.edit_line(ch)
-                lines[i] = line
-                ids[i] = ch.id
-                spans[i] = ss
-                v.base[ch.id] = { name = ch.name, type = ch.type }
+            -- A hidden (filtered-out) entry is written NEITHER to the buffer NOR to `v.base`, so the
+            -- synchronize diff never sees it and leaves it untouched on disk.
+            local n = 0
+            for _, ch in ipairs(v.node.children or {}) do
+                if visible(ch) then
+                    n = n + 1
+                    local line, ss = render.edit_line(ch)
+                    lines[n] = line
+                    ids[n] = ch.id
+                    spans[n] = ss
+                    v.base[ch.id] = { name = ch.name, type = ch.type }
+                end
             end
             write_buffer(lines, ids, spans)
         end
         pcall(api.nvim_buf_set_name, state.buf, "lvim-files://" .. dir)
         if state.st then
-            if state.st.set_title then
-                state.st.set_title(breadcrumb(dir))
-            end
+            -- Resize FIRST (the size fn now widens to fit the breadcrumb, clamped to the panel's max), THEN
+            -- title it to the ACTUAL width: while the chain fits, the whole breadcrumb shows; once it overflows
+            -- the maxed-out panel, fit_title scrolls it to the tail so the current folder stays visible. `+2`
+            -- for the border-title's edge gutters (the frame spans a touch wider than the content window).
             if state.st.relayout then
                 state.st.relayout()
+            end
+            if state.st.set_title then
+                local avail = (state.win and api.nvim_win_is_valid(state.win))
+                        and (api.nvim_win_get_width(state.win) + 2)
+                    or 9999
+                state.st.set_title(fit_title(breadcrumb(dir), avail))
+            end
+            if state.st.set_footer then
+                state.st.set_footer(build_footer(counts))
             end
         end
         if cb then
@@ -200,6 +296,53 @@ local function render_dir(dir, cb)
     else
         model.load(v.node, finish)
     end
+end
+
+--- Flip the dotfiles filter and re-render the current directory (which rebuilds the buffer + the footer).
+local function toggle_dotfiles()
+    state.show_dotfiles = not state.show_dotfiles
+    if state.dir then
+        render_dir(state.dir)
+    end
+end
+
+--- Flip the gitignore filter and re-render the current directory.
+local function toggle_gitignore()
+    state.show_gitignore = not state.show_gitignore
+    if state.dir then
+        render_dir(state.dir)
+    end
+end
+
+--- One filter toggle button — the toggle KEY as the lead badge, the label lit when the entries are SHOWN
+--- (active) and dim when hidden, plus a live count. Same box style as the tree panel's filter bar.
+---@param label string
+---@param key string
+---@param active boolean
+---@param count integer
+---@param run fun()
+---@return table
+local function filter_button(label, key, active, count, run)
+    local box = {
+        icon = {
+            padding = { 1, 1 },
+            normal = "LvimFilesFilterKey",
+            active = "LvimFilesFilterKey",
+            hover = "LvimFilesFilterKey",
+            hover_active = "LvimFilesFilterKey",
+        },
+        text = {
+            padding = { 1, 1 },
+            normal = "LvimFilesFilterOff",
+            active = "LvimFilesFilterOn",
+            hover = "LvimFilesFilterOff",
+            hover_active = "LvimFilesFilterOn",
+        },
+    }
+    return surface.button(
+        { name = label, key = key, style = "action", active = active, count = count, run = run, hl = box },
+        "action"
+    )
 end
 
 --- Re-target the buffer to another directory (snapshotting the current one's edits).
@@ -564,6 +707,47 @@ local function setup_autocmds()
     })
 end
 
+--- The edit view footer: the dot / git filter toggles (top row, like the tree panel) + the action hints
+--- (bottom row). Rebuilt on every render / navigation / toggle (via `render_dir` → `st.set_footer`).
+---@param counts { dot: integer, ign: integer }
+---@return table
+build_footer = function(counts)
+    local ek = cfg().keys
+    return {
+        bars = {
+            {
+                align = "center",
+                items = {
+                    filter_button(
+                        "Dot",
+                        key_label(ek.toggle_dotfiles),
+                        state.show_dotfiles,
+                        counts.dot,
+                        toggle_dotfiles
+                    ),
+                    { type = "separator", text = "●", style = { padding = { 1, 1 }, hl = "LvimUiPeekFilterSep" } },
+                    filter_button(
+                        "Git",
+                        key_label(ek.toggle_gitignore),
+                        state.show_gitignore,
+                        counts.ign,
+                        toggle_gitignore
+                    ),
+                },
+            },
+            {
+                align = "center",
+                items = {
+                    { key = key_hint(ek.synchronize), name = "sync", no_hotkey = true, run = request_sync },
+                    { key = key_hint(ek.go_in), name = "enter", no_hotkey = true, run = go_in },
+                    { key = key_hint(ek.go_out), name = "up", no_hotkey = true, run = go_out },
+                    { key = key_hint(ek.close), name = "close", no_hotkey = true, run = request_close },
+                },
+            },
+        },
+    }
+end
+
 --- Open the edit view on `dir` (default: the current file's directory, else the cwd). An
 --- already-open view re-targets.
 ---@param dir? string
@@ -590,20 +774,30 @@ function M.open(dir)
     end
     state.opener = api.nvim_get_current_win()
     state.base_dir = dir
+    -- Seed the filters from config (same defaults as the tree panel; `.` / `H` toggle them live).
+    state.show_dotfiles = config.filters.dotfiles ~= false
+    state.show_gitignore = config.filters.gitignore ~= false
 
     -- Pre-load the first listing so the float opens already sized to its content.
     local v = view_for(dir)
     model.load(v.node, function()
         local ek = cfg().keys
         local provider = {
-            cursorline = true,
+            -- The NEUTRAL cursorline (bg-tint only), like the tree panel — NOT the float default
+            -- `LvimUiPeekCursorLine`, whose yellow fg would repaint the row's icon + name. The active row
+            -- reads as a tinted background while every icon / name keeps its own colour.
+            cursorline = "LvimUiCursorLine",
             size = function()
                 local w, h = 40, 1
-                local node = state.views[state.dir or dir] and state.views[state.dir or dir].node
+                local dir_now = state.dir or dir
+                local node = state.views[dir_now] and state.views[dir_now].node
                 for _, ch in ipairs((node and node.children) or v.node.children or {}) do
                     w = math.max(w, vim.fn.strdisplaywidth(ch.name) + 8)
                     h = h + 1
                 end
+                -- Also widen to fit the breadcrumb border-title as the chain grows (the surface clamps this to
+                -- its max width; beyond that the title is scrolled to the tail — see fit_title in render_dir).
+                w = math.max(w, vim.fn.strdisplaywidth(breadcrumb(dir_now)) + 6)
                 return w, math.max(1, h - 1)
             end,
             update = function(pan)
@@ -620,6 +814,27 @@ function M.open(dir)
                     -- (e.g. `=` synchronize vs the global `==`) fires immediately instead of raising the
                     -- helper's disambiguation popup.
                     vim.b[pan.buf].lvim_keys_helper_disable = true
+                    -- Hide the hardware cursor while the edit buffer is the current window (the cursorline marks
+                    -- the row), matching the tree panel. It STAYS editable, so the cursor must come back to see
+                    -- what is typed: the input-buffer exemption (highest precedence in lvim-utils.cursor) shows it
+                    -- in INSERT mode and re-hides on leave. Both marks are auto-cleared when the buffer is wiped
+                    -- on close (the cursor module's BufWipeout cleanup), and the buffer-local autocmds go with it.
+                    lvim_cursor.mark_hide_buffer(pan.buf, true)
+                    local cgrp = api.nvim_create_augroup("LvimFilesEditCursor", { clear = true })
+                    api.nvim_create_autocmd("InsertEnter", {
+                        group = cgrp,
+                        buffer = pan.buf,
+                        callback = function()
+                            lvim_cursor.mark_input_buffer(pan.buf, true)
+                        end,
+                    })
+                    api.nvim_create_autocmd("InsertLeave", {
+                        group = cgrp,
+                        buffer = pan.buf,
+                        callback = function()
+                            lvim_cursor.mark_input_buffer(pan.buf, false)
+                        end,
+                    })
                 end
                 state.win = pan.win
             end,
@@ -629,6 +844,8 @@ function M.open(dir)
                 map(ek.go_out, go_out)
                 map(ek.synchronize, request_sync)
                 map(ek.close, request_close)
+                map(ek.toggle_dotfiles, toggle_dotfiles)
+                map(ek.toggle_gitignore, toggle_gitignore)
             end,
             on_close = function()
                 if state.augroup then
@@ -649,21 +866,16 @@ function M.open(dir)
             title_pos = "center", -- the breadcrumb is retitled live via st.set_title on navigation
             panel_border = "none",
             size = { width = { auto = true, max = 0.7 }, height = { auto = true, max = 0.7, min = 5 } },
-            content = { blocks = { { id = "edit", provider = provider } } },
-            close_keys = {}, -- <Esc> must stay plain insert-leave; the close key guards pending ops
-            footer = {
-                bars = {
-                    {
-                        align = "center",
-                        items = {
-                            { key = key_hint(ek.synchronize), name = "sync", no_hotkey = true, run = request_sync },
-                            { key = key_hint(ek.go_in), name = "enter", no_hotkey = true, run = go_in },
-                            { key = key_hint(ek.go_out), name = "up", no_hotkey = true, run = go_out },
-                            { key = key_hint(ek.close), name = "close", no_hotkey = true, run = request_close },
-                        },
-                    },
-                },
+            -- A left/right 1-cell blank inset (`" "` edges draw no glyph — pure padding) so the icon + name
+            -- content does not touch the frame edges, mirroring the top/bottom air. The buffer text itself
+            -- stays clean ("icon name") — the padding is border geometry, not buffer content, so editing /
+            -- synchronize are unaffected.
+            content = {
+                blocks = { { id = "edit", provider = provider, border = { "", "", "", " ", "", "", "", " " } } },
             },
+            close_keys = {}, -- <Esc> must stay plain insert-leave; the close key guards pending ops
+            -- The filter toggles + action hints; render_dir refreshes it with the live per-dir counts.
+            footer = build_footer({ dot = 0, ign = 0 }),
         })
         state.dir = dir
         setup_autocmds()

@@ -52,6 +52,8 @@ end
 ---@field go_out string|string[]        re-target the buffer to the parent directory
 ---@field synchronize string|string[]   diff the buffer → confirm → apply (also `:w`)
 ---@field close string|string[]         close the edit view (pending edits are discarded)
+---@field toggle_dotfiles string|string[]   toggle the dotfiles filter (hidden entries are untouched on sync)
+---@field toggle_gitignore string|string[]  toggle the gitignore filter (hidden entries are untouched on sync)
 
 ---@class LvimFilesEditConfig
 ---@field confirm boolean               show the op-list confirm panel before applying (false = apply directly)
@@ -145,6 +147,8 @@ local M = {
             go_out = "h",
             synchronize = "=",
             close = "q",
+            toggle_dotfiles = ".",
+            toggle_gitignore = "H",
         },
     },
     filters = {
