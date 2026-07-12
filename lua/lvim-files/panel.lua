@@ -2,14 +2,15 @@
 -- surface pinned to one edge (winfixwidth, NormalSB background) — the same window class as
 -- the lvim-lsp outline: a plain window the plugin owns, whose buffer carries the
 -- "lvim-files" filetype so the user's cursor `panel_ft` registration hides the hardware
--- cursor while the panel is current. The in-buffer HEADER (root path band + filter band) is
--- rendered through the lvim-ui bar/button primitives, and every popup the panel spawns
--- (add/rename inputs, delete confirm, help) goes through lvim-ui — so it themes and keys
--- like the rest of the set. The root-path band sits at the TOP of the buffer; the filter bar (dot / git
--- toggles) rides the surface's native-split FOOTER (`footer = { bars = … }` + `set_footer` for live counts)
--- — a bar lvim-ui pins to the panel's bottom row, so it stays visible however far the tree scrolls. The
--- tree renders from the shared fs model + decoration pipeline; git/diagnostic badges sit right-aligned as
--- virtual text.
+-- cursor while the panel is current. The TREE itself renders through the SHARED
+-- `lvim-ui.tree` primitive (fold state, guides/markers, badges, scrollbar, canonical keys +
+-- mouse); this module owns the fs model/git/diagnostics data, the filters, the file actions
+-- and the popups (add/rename inputs, delete confirm, help — all through lvim-ui, so it
+-- themes and keys like the rest of the set). The root-path band sits at the TOP of the
+-- buffer (the tree's `header` rows); the filter bar (dot / git toggles) rides the surface's
+-- native-split FOOTER (`footer = { bars = … }` + `set_footer` for live counts) — a bar
+-- lvim-ui pins to the panel's bottom row, so it stays visible however far the tree scrolls.
+-- Git/diagnostic badges sit right-aligned as virtual text (tree node `badges`).
 --
 ---@module "lvim-files.panel"
 
@@ -27,17 +28,13 @@ local uv = vim.uv
 
 local M = {}
 
-local NS = api.nvim_create_namespace("LvimFilesPanel")
-
 ---@class LvimFilesPanelState
 local state = {
     surface = nil, ---@type table|nil        the surface handle
     win = nil, ---@type integer|nil          the panel window
     buf = nil, ---@type integer|nil          the panel buffer
     root = nil, ---@type LvimFilesNode|nil   the tree root
-    rows = {}, ---@type table<integer, LvimFilesNode>  buffer line → node
-    header_rows = 0, ---@type integer        lines taken by the in-buffer header bands
-    expanded = {}, ---@type table<string, boolean>  path → expanded
+    panel = nil, ---@type table|nil          the lvim-ui.tree handle (the shared tree content layer)
     watched = {}, ---@type table<string, LvimFilesNode>  path → watched dir node
     seeded = false, ---@type boolean         filters seeded from config (once per session)
     show_dotfiles = true, ---@type boolean
@@ -113,7 +110,13 @@ local function unwatch(node)
     end
 end
 
-local schedule_render -- forward decl (used by the async load completions)
+--- Coalesced repaint — delegates to the shared tree's queue (bursts of async loads / git
+--- refreshes collapse into one repaint on the next tick).
+local function schedule_render()
+    if state.panel then
+        state.panel.refresh()
+    end
+end
 
 --- Ensure an expanded directory is loaded; renders again once the scan lands.
 ---@param node LvimFilesNode
@@ -197,157 +200,72 @@ local function root_label(width)
     return path
 end
 
--- ── tree rendering ────────────────────────────────────────────────────────────
+-- ── tree nodes (the lvim-ui.tree provider data) ──────────────────────────────
 
---- Pad a glyph to exactly two display columns (glyphs may render 1 or 2 cells).
----@param glyph string
----@return string
-local function cell(glyph)
-    return glyph .. string.rep(" ", math.max(0, 2 - vim.fn.strdisplaywidth(glyph)))
-end
-
---- Repaint the whole panel buffer: the header bands, then the filtered tree.
-local function do_render()
-    if not (M.is_open() and state.buf and api.nvim_buf_is_valid(state.buf) and state.root) then
-        return
-    end
-    local width = api.nvim_win_get_width(state.win)
+--- Map a model directory's (filtered) children into `lvim-ui.tree` nodes. Re-run per render —
+--- directories hand the tree a LAZY `children` function, so only EXPANDED branches materialize and
+--- every repaint re-decorates live (git badges, diagnostics, the cut strike-through). The model
+--- node rides along as `data` (the actions read it back from `selected()`).
+---@param node LvimFilesNode
+---@return LvimUiTreeNode[]
+local function to_nodes(node)
     local icons = config.icons
-
-    -- Count what the filters cover (over every LOADED entry, unfiltered).
-    local counts = { dot = 0, ign = 0 }
-    local function count_walk(node)
-        for _, ch in ipairs(node.children or {}) do
-            if ch.name:sub(1, 1) == "." then
-                counts.dot = counts.dot + 1
-            end
-            if git.is_ignored(ch.path) then
-                counts.ign = counts.ign + 1
-            end
-            if ch.loaded then
-                count_walk(ch)
-            end
-        end
-    end
-    count_walk(state.root)
-
-    local lines, hls, virts, rows = {}, {}, {}, {}
-
-    -- Header: only the root path (base directory) — the tree sits DIRECTLY beneath it, flush to the top.
-    -- The filter bar moved to the window BOTTOM (appended after the tree below).
-    local rlabel = " " .. icons.dir_open .. " " .. root_label(width)
-    lines[1] = rlabel
-    hls[#hls + 1] = { 0, 0, -1, "LvimFilesRoot" }
-    state.header_rows = 1
-
     local cut_path = state.clipboard and state.clipboard.mode == "cut" and state.clipboard.path or nil
+    local out = {}
+    for _, ch in ipairs(node.children or {}) do
+        if visible(ch) then
+            local is_dir = model.is_dir(ch)
+            local expanded = is_dir and state.panel ~= nil and state.panel.expanded(ch.path)
+            local glyph, icon_hl = render.node_icon(ch, expanded)
 
-    ---@param node LvimFilesNode
-    ---@param guide string
-    local function walk(node, guide)
-        for _, ch in ipairs(node.children or {}) do
-            if visible(ch) then
-                local is_dir = model.is_dir(ch)
-                local expanded = is_dir and state.expanded[ch.path] == true
-                local marker = is_dir and cell(expanded and icons.fold_open or icons.fold_closed) or "  "
-                local glyph, icon_hl = render.node_icon(ch, expanded)
-                local line = guide .. marker .. glyph .. " " .. ch.name
-                lines[#lines + 1] = line
-                local row = #lines
-                rows[row] = ch
-                if #guide > 0 then
-                    hls[#hls + 1] = { row - 1, 0, #guide, "LvimFilesGuide" }
-                end
-                if is_dir then
-                    hls[#hls + 1] = { row - 1, #guide, #guide + #marker, "LvimFilesFold" }
-                end
-                local ioff = #guide + #marker
-                hls[#hls + 1] = { row - 1, ioff, ioff + #glyph, icon_hl }
-                local noff = ioff + #glyph + 1
-                local name_hl = (cut_path == ch.path) and "LvimFilesCut" or render.name_hl(ch)
-                hls[#hls + 1] = { row - 1, noff, noff + #ch.name, name_hl }
-
-                -- Right-aligned badges: git status + worst contained diagnostic.
-                local vt = {}
-                local gglyph, ghl = render.git_badge(ch.path)
-                if gglyph then
-                    vt[#vt + 1] = { gglyph .. " ", ghl }
-                end
-                local dglyph, dhl = render.diag_badge(state.diag[ch.path])
-                if dglyph then
-                    vt[#vt + 1] = { dglyph .. " ", dhl }
-                end
-                if ch.type == "link" then
-                    table.insert(vt, 1, { icons.symlink .. " ", "LvimFilesSymlink" })
-                end
-                if #vt > 0 then
-                    virts[#virts + 1] = { row - 1, vt }
-                end
-
-                if is_dir and expanded then
-                    ensure_loaded(ch)
-                    walk(ch, guide .. icons.guide .. " ")
-                end
+            -- Right-aligned badges: symlink marker + git status + worst contained diagnostic.
+            local badges = {}
+            if ch.type == "link" then
+                badges[#badges + 1] = { icons.symlink .. " ", "LvimFilesSymlink" }
             end
+            local gglyph, ghl = render.git_badge(ch.path)
+            if gglyph then
+                badges[#badges + 1] = { gglyph .. " ", ghl }
+            end
+            local dglyph, dhl = render.diag_badge(state.diag[ch.path])
+            if dglyph then
+                badges[#badges + 1] = { dglyph .. " ", dhl }
+            end
+
+            out[#out + 1] = {
+                id = ch.path,
+                label = ch.name,
+                icon = glyph,
+                icon_hl = icon_hl,
+                label_hl = (cut_path == ch.path) and "LvimFilesCut" or render.name_hl(ch),
+                expandable = is_dir,
+                children = is_dir and function()
+                    ensure_loaded(ch) -- kick the async scan; renders again when it lands
+                    return to_nodes(ch)
+                end or nil,
+                badges = #badges > 0 and badges or nil,
+                data = ch,
+            }
         end
     end
-    ensure_loaded(state.root)
-    walk(state.root, " ") -- a 1-space left margin so the tree does not butt against the window edge
-    if #lines == state.header_rows then
-        lines[#lines + 1] = "  (empty)"
-        hls[#hls + 1] = { #lines - 1, 0, -1, "LvimFilesEmpty" }
-    end
-
-    vim.bo[state.buf].modifiable = true
-    api.nvim_buf_set_lines(state.buf, 0, -1, false, lines)
-    vim.bo[state.buf].modifiable = false
-    api.nvim_buf_clear_namespace(state.buf, NS, 0, -1)
-    for _, h in ipairs(hls) do
-        pcall(api.nvim_buf_set_extmark, state.buf, NS, h[1], h[2], {
-            end_col = h[3] >= 0 and h[3] or nil,
-            end_row = h[3] < 0 and h[1] + 1 or nil,
-            hl_eol = h[3] < 0 or nil,
-            hl_group = h[4],
-            priority = h[5] or 200,
-        })
-    end
-    for _, v in ipairs(virts) do
-        pcall(api.nvim_buf_set_extmark, state.buf, NS, v[1], 0, {
-            virt_text = v[2],
-            virt_text_pos = "right_align",
-            hl_mode = "combine",
-        })
-    end
-    state.rows = rows
-    -- The filter bar lives in the surface's native-split FOOTER (a bar pinned to the panel bottom, owned by
-    -- lvim-ui) — refresh it with the live counts on every render.
-    if state.surface and state.surface.set_footer then
-        state.surface.set_footer({ bars = { { items = filter_items(counts), align = "center" } } })
-    end
+    return out
 end
 
---- Coalesce render requests into one repaint on the next tick (async loads / bursts).
-local render_queued = false
-schedule_render = function()
-    if render_queued then
-        return
+--- Repaint NOW (synchronous — before a focus/reveal that needs the fresh rows).
+local function do_render()
+    if state.panel and M.is_open() and state.root then
+        ensure_loaded(state.root)
+        state.panel.render()
     end
-    render_queued = true
-    vim.schedule(function()
-        render_queued = false
-        do_render()
-    end)
 end
 
 -- ── node actions ──────────────────────────────────────────────────────────────
 
---- The node under the panel cursor (nil on the header rows).
+--- The model node under the panel cursor (nil on the header/empty rows).
 ---@return LvimFilesNode|nil
 local function cur_node()
-    if not M.is_open() then
-        return nil
-    end
-    return state.rows[api.nvim_win_get_cursor(state.win)[1]]
+    local ui = state.panel and state.panel.selected()
+    return ui and ui.data or nil
 end
 
 --- The directory an add/paste under the cursor targets: the node itself when it is a
@@ -429,69 +347,44 @@ local function open_current_as(how)
     open_file(node, nil, how)
 end
 
---- `open` on the current row: toggle a directory, open a file.
 --- With `auto_collapse`, keep only the branch leading to `keep_path` open: collapse every other
 --- expanded directory (one that is neither `keep_path` itself nor an ancestor of it). A no-op when
---- the option is off.
+--- the option is off. Collapses DEEPEST-first so every folding node is still reachable through its
+--- (still-expanded) ancestors — the tree's `on_collapse` hook then releases each watcher reliably.
 ---@param keep_path string
 local function collapse_others(keep_path)
-    if not cfg().auto_collapse then
+    if not (cfg().auto_collapse and state.panel) then
         return
     end
     keep_path = model.normalize(keep_path)
-    for dpath in pairs(state.expanded) do
-        local keep = dpath == keep_path or keep_path:sub(1, #dpath + 1) == (dpath .. "/")
-        if not keep then
-            state.expanded[dpath] = nil
-            local node = model.find(state.root, dpath)
-            if node then
-                unwatch(node)
+    local close = {}
+    for dpath, on in pairs(state.panel.expanded_state()) do
+        if on then
+            local keep = dpath == keep_path or keep_path:sub(1, #dpath + 1) == (dpath .. "/")
+            if not keep then
+                close[#close + 1] = dpath
             end
         end
     end
+    table.sort(close, function(a, b)
+        return #a > #b
+    end)
+    for _, dpath in ipairs(close) do
+        state.panel.collapse(dpath)
+    end
 end
 
+--- `open` on the current row: toggle a directory, open a file. (The tree's `on_expand` hook does
+--- the watch + load + `collapse_others`; `on_collapse` releases the watcher.)
 local function action_open()
     local node = cur_node()
     if not node then
         return
     end
     if model.is_dir(node) then
-        if state.expanded[node.path] then
-            state.expanded[node.path] = nil
-            unwatch(node)
-        else
-            state.expanded[node.path] = true
-            watch(node)
-            ensure_loaded(node)
-            collapse_others(node.path) -- keep only this branch open
-        end
-        do_render()
+        state.panel.toggle(node.path)
     else
         open_file(node)
-    end
-end
-
---- `close_node`: collapse the directory under the cursor, else jump to its parent's row.
-local function action_close_node()
-    local node = cur_node()
-    if not node then
-        return
-    end
-    if model.is_dir(node) and state.expanded[node.path] then
-        state.expanded[node.path] = nil
-        unwatch(node)
-        do_render()
-        return
-    end
-    local parent = node.parent
-    if parent then
-        for line, n in pairs(state.rows) do
-            if n == parent then
-                api.nvim_win_set_cursor(state.win, { line, 0 })
-                return
-            end
-        end
     end
 end
 
@@ -647,7 +540,7 @@ local set_root -- forward decl
 local function action_root_up()
     local parent = vim.fs.dirname(state.root.path)
     if parent and parent ~= state.root.path then
-        state.expanded[state.root.path] = true -- keep the old root open under the new one
+        state.panel.expand(state.root.path) -- keep the old root open under the new one
         set_root(parent)
     end
 end
@@ -676,15 +569,13 @@ local function reveal(path)
     ---@param node LvimFilesNode
     ---@param i integer
     local function step(node, i)
+        if not (M.is_open() and state.panel) then
+            return -- the async load chain outlived the panel
+        end
         if i > #comps then
             collapse_others(path) -- keep only the revealed file's branch open (auto_collapse)
             do_render()
-            for line, n in pairs(state.rows) do
-                if n.path == path and is_valid_win(state.win) then
-                    api.nvim_win_set_cursor(state.win, { line, 0 })
-                    break
-                end
-            end
+            state.panel.focus(path)
             return
         end
         model.load(node, function()
@@ -700,8 +591,7 @@ local function reveal(path)
                 return
             end
             if model.is_dir(child) and i < #comps then
-                state.expanded[child.path] = true
-                watch(child)
+                state.panel.expand(child.path) -- on_expand → watch (+ load, satisfied by this chain)
             end
             step(child, i + 1)
         end)
@@ -896,15 +786,17 @@ end
 
 -- ── keymaps / autocmds ────────────────────────────────────────────────────────
 
-local function set_keys()
-    local function map(lhs, fn)
-        for _, l in ipairs(type(lhs) == "table" and lhs or { lhs }) do
-            vim.keymap.set("n", l, fn, { buffer = state.buf, nowait = true, silent = true })
-        end
-    end
+--- Bind the panel's config keymaps (the tree's `on_keys` hook — bound AFTER the tree's canonical
+--- `l`/`<CR>`/`h`, so a config key on the same lhs overrides the default). Mouse is the shared tree
+--- canon: a click selects + activates the row (open the file / toggle the directory), a click on the
+--- fold chevron / a double-click toggles the fold.
+---@param map fun(lhs: string|string[], fn: fun())
+local function set_keys(map)
     local actions = {
         open = action_open,
-        close_node = action_close_node,
+        close_node = function()
+            state.panel.collapse_or_parent()
+        end,
         open_pick = action_open_pick,
         open_vsplit = function()
             open_current_as("vsplit")
@@ -942,30 +834,10 @@ local function set_keys()
             map(lhs, fn)
         end
     end
-    -- Mouse: a click on a filter button toggles it; a click on a tree row opens it.
-    map("<LeftMouse>", function()
-        local m = vim.fn.getmousepos()
-        if m.winid ~= state.win then
-            return
-        end
-        if state.rows[m.line] then
-            api.nvim_win_set_cursor(state.win, { m.line, 0 })
-            action_open()
-        end
-    end)
 end
 
 local function setup_autocmds()
     state.augroup = api.nvim_create_augroup("LvimFilesPanel", { clear = true })
-    -- Re-render on resize so the bottom-pinned filter bar re-pads to the new window height.
-    api.nvim_create_autocmd({ "WinResized", "VimResized" }, {
-        group = state.augroup,
-        callback = function()
-            if M.is_open() then
-                schedule_render()
-            end
-        end,
-    })
     -- close_if_last (opt-in): when some other window closes and the tree would be left ALONE in the tab,
     -- close it too so it never blocks a quit. Deferred so the closing window is already gone; floats are
     -- ignored. In the last tab the tree is the last real window (which can't be `nvim_win_close`d) so we
@@ -1107,18 +979,8 @@ local function setup_autocmds()
             end
         end,
     })
-    -- Keep the cursor off the header bands (the tree starts below them).
-    api.nvim_create_autocmd("CursorMoved", {
-        group = state.augroup,
-        callback = function(ev)
-            if ev.buf == state.buf and M.is_open() then
-                local line = api.nvim_win_get_cursor(state.win)[1]
-                if line <= state.header_rows and api.nvim_buf_line_count(state.buf) > state.header_rows then
-                    api.nvim_win_set_cursor(state.win, { state.header_rows + 1, 0 })
-                end
-            end
-        end,
-    })
+    -- (The header-row cursor clamp and the resize re-render are the shared tree's / the surface's job
+    -- now — the tree keeps the cursor off its `header` rows, the native split re-renders on WinResized.)
 end
 
 -- ── lifecycle ─────────────────────────────────────────────────────────────────
@@ -1171,24 +1033,85 @@ function M.open(enter, path)
     end
 
     local pc = cfg()
-    local provider = {
-        cursorline = true,
+    -- The SHARED lvim-ui.tree is the content layer: it owns fold state, guides/markers, badges, the
+    -- scrollbar, the header clamp and the canonical keys + mouse; this module feeds it model nodes
+    -- (the lazy `to_nodes` factory) and binds the file actions on top.
+    state.panel = lvim_ui.tree({
+        default_expanded = false, -- directories start collapsed; the expand set is the user's
+        connectors = false, -- plain rows (no ├/└) — the file-tree look
+        elide_guides = false, -- a solid │ per ancestor level
+        margin = 1, -- a 1-space left margin so the tree does not butt against the window edge
+        icons = {
+            fold_open = config.icons.fold_open,
+            fold_closed = config.icons.fold_closed,
+            guide = config.icons.guide,
+        },
+        hl = {
+            guide = "LvimFilesGuide",
+            fold = "LvimFilesFold",
+            empty = "LvimFilesEmpty",
+        },
+        empty = "  (empty)",
+        -- The root-path band: the tree's header rows (cursor kept off them by the primitive).
+        header = function(width)
+            return { " " .. config.icons.dir_open .. " " .. root_label(width) }, { { 0, 0, -1, "LvimFilesRoot" } }
+        end,
         filetype = "lvim-files", -- register this in the user's cursor `panel_ft` list
+        cursorline = true,
         size = function()
             local width = pc.width or 34
             local px = (width <= 1) and math.floor(vim.o.columns * width) or math.floor(width)
             return math.max(20, px), 1
         end,
-        update = function(pan)
-            if state.buf ~= pan.buf then
-                state.buf, state.win = pan.buf, pan.win
-                vim.bo[pan.buf].buftype = "nofile"
-            end
-            do_render()
+        -- The lazy top level: re-run per render so every repaint re-decorates live (git/diag badges).
+        root = function()
+            return state.root and to_nodes(state.root) or {}
         end,
-        keys = function(_, pan)
+        -- Activation (canonical <CR>/l fallback + the mouse click): open a file / toggle a directory.
+        on_activate = function(ui)
+            if model.is_dir(ui.data) then
+                state.panel.toggle(ui.data.path)
+            else
+                open_file(ui.data)
+            end
+        end,
+        -- Every expansion path (key, mouse chevron, reveal) funnels here: watch the directory, kick its
+        -- scan, and — with `auto_collapse` — keep only this branch open.
+        on_expand = function(ui)
+            watch(ui.data)
+            ensure_loaded(ui.data)
+            collapse_others(ui.data.path)
+        end,
+        on_collapse = function(ui)
+            unwatch(ui.data)
+        end,
+        on_keys = function(map, pan)
             state.buf, state.win = pan.buf, pan.win
-            set_keys()
+            set_keys(map)
+        end,
+        -- Live footer counts after every repaint: what the filters cover (over every LOADED entry,
+        -- unfiltered) — pushed into the surface's bottom-pinned filter bar.
+        on_render = function()
+            if not (state.root and state.surface and state.surface.set_footer) then
+                return
+            end
+            local counts = { dot = 0, ign = 0 }
+            ---@param node LvimFilesNode
+            local function count_walk(node)
+                for _, ch in ipairs(node.children or {}) do
+                    if ch.name:sub(1, 1) == "." then
+                        counts.dot = counts.dot + 1
+                    end
+                    if git.is_ignored(ch.path) then
+                        counts.ign = counts.ign + 1
+                    end
+                    if ch.loaded then
+                        count_walk(ch)
+                    end
+                end
+            end
+            count_walk(state.root)
+            state.surface.set_footer({ bars = { { items = filter_items(counts), align = "center" } } })
         end,
         on_close = function()
             for _, node in pairs(state.watched) do
@@ -1213,9 +1136,9 @@ function M.open(enter, path)
                 pcall(unsub)
             end
             state.unsub = {}
-            state.win, state.buf, state.rows, state.root, state.surface = nil, nil, {}, nil, nil
+            state.win, state.buf, state.root, state.panel, state.surface = nil, nil, nil, nil, nil
         end,
-    }
+    })
 
     state.surface = surface.open({
         mode = "split",
@@ -1226,9 +1149,10 @@ function M.open(enter, path)
         normal_hl = "NormalSB",
         title = (pc.title ~= false and pc.title ~= "") and pc.title or nil,
         size = { width = { fixed = pc.width or 34 } },
-        content = { blocks = { { id = "tree", provider = provider } } },
-        -- The dot / git filter toggles ride the surface's native-split FOOTER (pinned to the panel bottom);
-        -- do_render refreshes it live via state.surface.set_footer with the real counts.
+        content = { blocks = { { id = "tree", provider = state.panel.provider } } },
+        -- The dot / git filter toggles ride the surface's native-split FOOTER (pinned to the panel
+        -- bottom); the tree's `on_render` refreshes it live via state.surface.set_footer with the
+        -- real counts.
         footer = { bars = { { items = filter_items({ dot = 0, ign = 0 }), align = "center" } } },
         close_keys = {},
     })

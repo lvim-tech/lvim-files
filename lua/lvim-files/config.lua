@@ -8,10 +8,6 @@
 --- characters) so they survive editing/tooling that mangles private-use chars.
 ---@param cp integer
 ---@return string
-local function nf(cp)
-    return vim.fn.nr2char(cp, 1)
-end
-
 ---@class LvimFilesPanelKeys
 ---@field open string|string[]          expand a directory / open a file (jump to it)
 ---@field close_node string|string[]    collapse the node, or jump to its parent
@@ -43,6 +39,7 @@ end
 ---@field close_if_last boolean         close the tree when it would be the last window in the tab
 ---@field focus_on_open boolean         move the cursor into the tree when it opens
 ---@field follow boolean                reveal the current buffer's file in the tree as windows/buffers change
+---@field auto_collapse boolean         when a file is revealed/expanded, keep only its branch open (opt-in)
 ---@field input "popup"|"native"        text prompts (rename/add): the lvim-ui popup, or Neovim's vim.ui.input
 ---@field title string|false            the panel winbar title (false = none)
 ---@field keys LvimFilesPanelKeys
@@ -163,27 +160,27 @@ local M = {
     hijack_netrw = false,
     lsp_rename = true,
     icons = {
-        fold_open = nf(0xF0D7), -- nf-fa-caret_down
-        fold_closed = nf(0xF0DA), -- nf-fa-caret_right
+        fold_open = "", -- nf-fa-caret_down
+        fold_closed = "", -- nf-fa-caret_right
         guide = "│",
-        dir = nf(0xF07B), -- nf-fa-folder
-        dir_open = nf(0xF07C), -- nf-fa-folder_open
-        file = nf(0xF15B), -- nf-fa-file
-        symlink = nf(0xF481), -- nf-oct-file_symlink_file
+        dir = "", -- nf-fa-folder
+        dir_open = "", -- nf-fa-folder_open
+        file = "", -- nf-fa-file
+        symlink = "", -- nf-oct-file_symlink_file
         git = {
-            added = nf(0xF067), -- nf-fa-plus
-            modified = nf(0xF444), -- nf-oct-dot_fill
-            deleted = nf(0xF00D), -- nf-fa-close
-            renamed = nf(0xF061), -- nf-fa-arrow_right
-            untracked = nf(0xF128), -- nf-fa-question
-            ignored = nf(0xF070), -- nf-fa-eye_slash
-            conflict = nf(0xF419), -- nf-oct-git_merge
+            added = "", -- nf-fa-plus
+            modified = "", -- nf-oct-dot_fill
+            deleted = "", -- nf-fa-close
+            renamed = "", -- nf-fa-arrow_right
+            untracked = "", -- nf-fa-question
+            ignored = "", -- nf-fa-eye_slash
+            conflict = "", -- nf-oct-git_merge
         },
         diag = {
-            error = nf(0xF057), -- nf-fa-times_circle
-            warn = nf(0xF071), -- nf-fa-exclamation_triangle
-            info = nf(0xF05A), -- nf-fa-info_circle
-            hint = nf(0xF059), -- nf-fa-question_circle
+            error = "", -- nf-fa-times_circle
+            warn = "", -- nf-fa-exclamation_triangle
+            info = "", -- nf-fa-info_circle
+            hint = "", -- nf-fa-question_circle
         },
     },
 }
