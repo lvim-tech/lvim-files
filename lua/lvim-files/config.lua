@@ -4,10 +4,6 @@
 --
 ---@module "lvim-files.config"
 
---- A Nerd Font glyph from its codepoint — glyphs are built from codepoints (not literal
---- characters) so they survive editing/tooling that mangles private-use chars.
----@param cp integer
----@return string
 ---@class LvimFilesPanelKeys
 ---@field open string|string[]          expand a directory / open a file (jump to it)
 ---@field close_node string|string[]    collapse the node, or jump to its parent
@@ -35,6 +31,8 @@
 ---@class LvimFilesPanelConfig
 ---@field width number                  panel width — a column count (>1) or a fraction of the screen (≤1)
 ---@field side string                   "left" | "right"
+---@field padding { left?: integer, right?: integer }  blank columns around the tree rows (title band excluded)
+---@field scrollbar boolean             right-edge thumb while the tree overflows the window
 ---@field auto_close_on_open boolean    close the panel after opening a file
 ---@field close_if_last boolean         close the tree when it would be the last window in the tab
 ---@field focus_on_open boolean         move the cursor into the tree when it opens
@@ -104,6 +102,11 @@ local M = {
     panel = {
         width = 34,
         side = "left",
+        -- Breathing room around the tree ROWS (the title band always spans the full width). When `scrollbar` is
+        -- on, ONE more column is reserved on the right for the thumb, so it never sits on the content.
+        padding = { left = 1, right = 1 },
+        scrollbar = false, -- right-edge thumb while the tree overflows the window
+
         auto_close_on_open = false, -- close the panel after opening a file through it
         close_if_last = false, -- OPT-IN: close the tree when it would be left as the last window in the tab
         focus_on_open = true, -- move the cursor INTO the tree when it opens (else focus stays in the editor)

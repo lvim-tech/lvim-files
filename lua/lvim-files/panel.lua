@@ -1052,8 +1052,10 @@ function M.open(enter, path)
         default_expanded = false, -- directories start collapsed; the expand set is the user's
         connectors = false, -- plain rows (no ├/└) — the file-tree look
         elide_guides = false, -- a solid │ per ancestor level
-        -- `padding` is the tree's own default ({ left = 1, right = 2 }, plus a reserved column whenever the
-        -- scrollbar is actually shown) — no local margin workaround needed.
+        -- Content padding + scrollbar come from the LIVE config; the tree reserves one more right column for the
+        -- thumb whenever the bar is actually shown, so the bar never eats into the padding.
+        padding = pc.padding,
+        scrollbar = pc.scrollbar == true,
         icons = {
             fold_open = config.icons.fold_open,
             fold_closed = config.icons.fold_closed,
