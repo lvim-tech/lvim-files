@@ -218,18 +218,30 @@ local function to_nodes(node)
             local expanded = is_dir and state.panel ~= nil and state.panel.expanded(ch.path)
             local glyph, icon_hl = render.node_icon(ch, expanded)
 
-            -- Right-aligned badges: symlink marker + git status + worst contained diagnostic.
+            -- Right-aligned badges: symlink marker + git status + worst contained diagnostic. The blank BETWEEN
+            -- badges is a separator; there is deliberately NO trailing one — `lvim-ui.tree` insets right-aligned
+            -- badges by its own right padding (and the scrollbar column), so a trailing blank here would just
+            -- add a third gap before the bar.
             local badges = {}
+            ---@param glyph string
+            ---@param hl string|nil
+            local function badge(glyph, hl)
+                local g = hl or "LvimFilesEmpty"
+                if #badges > 0 then
+                    badges[#badges + 1] = { " ", g }
+                end
+                badges[#badges + 1] = { glyph, g }
+            end
             if ch.type == "link" then
-                badges[#badges + 1] = { icons.symlink .. " ", "LvimFilesSymlink" }
+                badge(icons.symlink, "LvimFilesSymlink")
             end
             local gglyph, ghl = render.git_badge(ch.path)
             if gglyph then
-                badges[#badges + 1] = { gglyph .. " ", ghl }
+                badge(gglyph, ghl)
             end
             local dglyph, dhl = render.diag_badge(state.diag[ch.path])
             if dglyph then
-                badges[#badges + 1] = { dglyph .. " ", dhl }
+                badge(dglyph, dhl)
             end
 
             out[#out + 1] = {
@@ -1040,7 +1052,8 @@ function M.open(enter, path)
         default_expanded = false, -- directories start collapsed; the expand set is the user's
         connectors = false, -- plain rows (no ├/└) — the file-tree look
         elide_guides = false, -- a solid │ per ancestor level
-        margin = 1, -- a 1-space left margin so the tree does not butt against the window edge
+        -- `padding` is the tree's own default ({ left = 1, right = 2 }, plus a reserved column whenever the
+        -- scrollbar is actually shown) — no local margin workaround needed.
         icons = {
             fold_open = config.icons.fold_open,
             fold_closed = config.icons.fold_closed,
