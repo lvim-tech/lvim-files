@@ -146,7 +146,7 @@ local M = {
             refresh = "R",
             edit_mode = "e",
             info = "i", -- everything known about the entry under the cursor (a read-only popup)
-            help = "?",
+            help = "g?", -- the set-wide cheatsheet chord
             close = "q",
         },
     },

@@ -179,15 +179,26 @@ local function filter_button(label, key, active, count, run)
     )
 end
 
---- The filter band's element list (two toggles with a ● group separator).
+local show_help -- forward decl (the footer's help chip is built before the window that opens it)
+
+--- The filter band's element list: the two filter toggles and the HELP chip. No ● separators — the panel is
+--- 34 columns wide and they cost the help chip its place; the panel's keys are not discoverable from the tree,
+--- so the cheatsheet's key has to be on the bar.
 ---@param counts { dot: integer, ign: integer }
 ---@return table[]
 local function filter_items(counts)
     local keys = cfg().keys
     return {
         filter_button("Dot", key_label(keys.toggle_dotfiles), state.show_dotfiles, counts.dot, toggle_dotfiles),
-        { type = "separator", text = "●", style = { padding = { 1, 1 }, hl = "LvimUiPeekFilterSep" } },
         filter_button("Git", key_label(keys.toggle_gitignore), state.show_gitignore, counts.ign, toggle_gitignore),
+        surface.button({
+            name = "help",
+            key = key_label(keys.help),
+            style = "action",
+            run = function()
+                show_help()
+            end,
+        }, "action"),
     }
 end
 
@@ -1067,7 +1078,7 @@ local HELP = {
 
 --- The keymap cheatsheet — the shared `lvim-ui.help` component (the rows, the striping, the colours and the
 --- window all live there; this only supplies the plugin's LIVE keys).
-local function show_help()
+function show_help()
     local keys = cfg().keys
     local items = {}
     for _, e in ipairs(HELP) do
