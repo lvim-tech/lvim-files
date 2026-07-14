@@ -484,9 +484,9 @@ local function confirm_ops(op_list)
             local lines, hls = {}, {}
             for i, r in ipairs(rows) do
                 local kcell = "  " .. r.verb
-                kcell = kcell .. string.rep(" ", math.max(0, keybox - #kcell))
+                kcell = kcell .. string.rep(" ", math.max(0, keybox - vim.fn.strdisplaywidth(kcell)))
                 local dcell = "  " .. r.detail
-                dcell = dcell .. string.rep(" ", math.max(0, width - keybox - #dcell))
+                dcell = dcell .. string.rep(" ", math.max(0, width - keybox - vim.fn.strdisplaywidth(dcell)))
                 lines[i] = kcell .. dcell
                 local body = "LvimFilesOp" .. r.family .. (i == cur and "Active" or "")
                 hls[#hls + 1] = { i - 1, 0, #kcell, "LvimFilesOp" .. r.family .. "Active" }

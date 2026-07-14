@@ -152,6 +152,26 @@ require("lvim-files").setup({
             hint = vim.fn.nr2char(0xF059, 1), -- 
         },
     },
+
+    colors = {
+        -- The `i` info popup. Every ROW is ONE accent: the VALUE wears it as text, the KEY box wears the same
+        -- accent as a background wash (`tint`). Accents are palette KEYS (they track the live theme) or a
+        -- literal "#rrggbb". The groups keep stable names — `LvimFilesInfoName` / `LvimFilesInfoKeyName`, and
+        -- so on per row — and are applied as DEFAULTS, so a colorscheme that defines them wins.
+        info = {
+            tint = 0.1, -- how far a key box's accent is blended toward the editor bg
+            accents = {
+                name = "blue",
+                path = "yellow",
+                type = "purple",
+                size = "green",
+                perms = "orange",
+                owner = "cyan",
+                time = "teal",
+                git = "red",
+            },
+        },
+    },
 })
 ```
 

@@ -565,16 +565,19 @@ local function action_info()
     -- Each row is a KEY box + a VALUE, and the value's colour says what KIND of fact it is (a path, a size, a
     -- permission, a time) — so the popup can be READ at a glance instead of parsed label by label.
     local lines, hls = {}, {}
-    ---@param k string
-    ---@param v string
-    ---@param group string?  the value's highlight (defaults to the plain fg)
-    local function row(k, v, group)
+    --- One info row: a KEY box and its VALUE, both in the row's own accent (`config.colors.info.accents`) —
+    --- the value as text, the key as a wash of the same colour.
+    ---@param k string     the label
+    ---@param v string     the value
+    ---@param kind string  the row's accent key ("name" | "path" | "size" | …)
+    local function row(k, v, kind)
         local label = ("  %-11s"):format(k .. ":")
         local text = label .. " " .. v
         local r = #lines -- 0-based row for the highlight spans
+        local name = kind:sub(1, 1):upper() .. kind:sub(2)
         lines[#lines + 1] = text
-        hls[#hls + 1] = { r, 2, #label, "LvimFilesInfoKey" } -- the key box (skip the 2-space lead)
-        hls[#hls + 1] = { r, #label + 1, #text, group or "LvimFilesFile" }
+        hls[#hls + 1] = { r, 2, #label, "LvimFilesInfoKey" .. name } -- the key box (skip the 2-space lead)
+        hls[#hls + 1] = { r, #label + 1, #text, "LvimFilesInfo" .. name }
     end
 
     local kind = st.type
@@ -585,31 +588,31 @@ local function action_info()
     end
 
     lines[#lines + 1] = ""
-    row("Name", node.name, "LvimFilesInfoName")
-    row("Path", vim.fn.fnamemodify(node.path, ":~"), "LvimFilesInfoPath")
-    row("Type", kind, "LvimFilesInfoType")
+    row("Name", node.name, "name")
+    row("Path", vim.fn.fnamemodify(node.path, ":~"), "path")
+    row("Type", kind, "type")
     if st.type == "directory" then
         -- Bounded walk: a directory's SIZE is its contents, but nothing may make this popup slow.
         local entries, bytes, truncated = dir_stats(node.path, 20000)
-        row("Entries", tostring(entries), "LvimFilesInfoSize")
-        row("Size", human_size(bytes) .. (truncated and "  (over 20k entries — partial)" or ""), "LvimFilesInfoSize")
+        row("Entries", tostring(entries), "size")
+        row("Size", human_size(bytes) .. (truncated and "  (over 20k entries — partial)" or ""), "size")
     else
-        row("Size", ("%s  (%d bytes)"):format(human_size(st.size), st.size), "LvimFilesInfoSize")
+        row("Size", ("%s  (%d bytes)"):format(human_size(st.size), st.size), "size")
     end
-    row("Perms", ("%s  (%04o)"):format(perm_string(st.mode), st.mode % 4096), "LvimFilesInfoPerms")
-    row("Owner", ("uid %d / gid %d"):format(st.uid, st.gid), "LvimFilesInfoOwner")
+    row("Perms", ("%s  (%04o)"):format(perm_string(st.mode), st.mode % 4096), "perms")
+    row("Owner", ("uid %d / gid %d"):format(st.uid, st.gid), "owner")
     lines[#lines + 1] = ""
-    row("Modified", when(st.mtime and st.mtime.sec), "LvimFilesInfoTime")
-    row("Accessed", when(st.atime and st.atime.sec), "LvimFilesInfoTime")
-    row("Changed", when(st.ctime and st.ctime.sec), "LvimFilesInfoTime")
+    row("Modified", when(st.mtime and st.mtime.sec), "time")
+    row("Accessed", when(st.atime and st.atime.sec), "time")
+    row("Changed", when(st.ctime and st.ctime.sec), "time")
     -- What the tree already knows about it, so the popup answers the same question the row's badge hints at.
     local gs = git.status(node.path)
     if gs and gs ~= "" then
         lines[#lines + 1] = ""
-        row("Git", tostring(gs), "LvimFilesGitModified")
+        row("Git", tostring(gs), "git")
     end
     if git.is_ignored(node.path) then
-        row("Git", "ignored", "LvimFilesGitIgnored")
+        row("Git", "ignored", "git")
     end
     lines[#lines + 1] = ""
 
@@ -1062,22 +1065,10 @@ local HELP = {
     { "close", "close the panel" },
 }
 
---- The keymap cheatsheet: full-width column-aligned KEY + DESCRIPTION boxes, striped blue /
---- yellow, each box a tint of its accent (key 0.4 bold, description 0.2 — raised to 0.4 on
---- the active row so the hidden cursor reads as one solid tinted row).
+--- The keymap cheatsheet — the shared `lvim-ui.help` component (the rows, the striping, the colours and the
+--- window all live there; this only supplies the plugin's LIVE keys).
 local function show_help()
     local keys = cfg().keys
-    local C = require("lvim-utils.colors")
-    local function mtint(color, t)
-        return uhl.blend(color, C.bg, t)
-    end
-    api.nvim_set_hl(0, "LvimFilesHelpKeyB", { fg = C.blue, bg = mtint(C.blue, 0.4), bold = true })
-    api.nvim_set_hl(0, "LvimFilesHelpDescB", { fg = C.blue, bg = mtint(C.blue, 0.2) })
-    api.nvim_set_hl(0, "LvimFilesHelpDescActiveB", { fg = C.blue, bg = mtint(C.blue, 0.4) })
-    api.nvim_set_hl(0, "LvimFilesHelpKeyY", { fg = C.yellow, bg = mtint(C.yellow, 0.4), bold = true })
-    api.nvim_set_hl(0, "LvimFilesHelpDescY", { fg = C.yellow, bg = mtint(C.yellow, 0.2) })
-    api.nvim_set_hl(0, "LvimFilesHelpDescActiveY", { fg = C.yellow, bg = mtint(C.yellow, 0.4) })
-
     local items = {}
     for _, e in ipairs(HELP) do
         local lhs = keys[e[1]]
@@ -1086,48 +1077,6 @@ local function show_help()
             items[#items + 1] = { lhs, e[2] }
         end
     end
-    local kw, dw = 0, 0
-    for _, r in ipairs(items) do
-        kw = math.max(kw, vim.fn.strdisplaywidth(r[1]))
-        dw = math.max(dw, vim.fn.strdisplaywidth(r[2]))
-    end
-    local keybox = kw + 4
-
-    local pan
-    local provider = {
-        hide_cursor = true,
-        size = function()
-            return keybox + dw + 4, #items
-        end,
-        render = function(width)
-            local cur = (pan and pan.win and api.nvim_win_is_valid(pan.win)) and api.nvim_win_get_cursor(pan.win)[1]
-                or 1
-            local lines, hls = {}, {}
-            for i, r in ipairs(items) do
-                local s = (i % 2 == 1) and "B" or "Y"
-                local kcell = "  " .. r[1]
-                kcell = kcell .. string.rep(" ", math.max(0, keybox - #kcell))
-                local dcell = "  " .. r[2]
-                dcell = dcell .. string.rep(" ", math.max(0, width - keybox - #dcell))
-                lines[i] = kcell .. dcell
-                local desc = (i == cur) and ("LvimFilesHelpDescActive" .. s) or ("LvimFilesHelpDesc" .. s)
-                hls[#hls + 1] = { i - 1, 0, #kcell, "LvimFilesHelpKey" .. s }
-                hls[#hls + 1] = { i - 1, #kcell, #lines[i], desc }
-            end
-            return lines, hls
-        end,
-        keys = function(_, p)
-            pan = p
-            api.nvim_create_autocmd("CursorMoved", {
-                buffer = p.buf,
-                callback = function()
-                    if p.refresh then
-                        p.refresh()
-                    end
-                end,
-            })
-        end,
-    }
     local close = { "<Esc>" }
     local ck = keys.close
     if type(ck) == "table" then
@@ -1140,31 +1089,7 @@ local function show_help()
     if keys.help then
         close[#close + 1] = key_label(keys.help)
     end
-    surface.open({
-        mode = "float",
-        border = surface.FRAME_BORDER,
-        title = "Files keymaps",
-        panel_border = "none",
-        size = { width = { auto = true, max = 0.7 }, height = { auto = true, max = 0.7 } },
-        close_keys = close,
-        content = { blocks = { { id = "help", provider = provider } } },
-        footer = {
-            bars = {
-                {
-                    align = "center",
-                    items = {
-                        {
-                            key = "q",
-                            name = "close",
-                            run = function(st)
-                                st.close()
-                            end,
-                        },
-                    },
-                },
-            },
-        },
-    })
+    lvim_ui.help({ title = "Files keymaps", items = items, close_keys = close })
 end
 
 -- ── keymaps / autocmds ────────────────────────────────────────────────────────

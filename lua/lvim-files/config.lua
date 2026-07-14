@@ -197,6 +197,26 @@ local M = {
             hint = "", -- nf-fa-question_circle
         },
     },
+
+    colors = {
+        -- The `i` info popup. Every ROW carries ONE accent: the VALUE on the right wears it as text, the KEY
+        -- box on the left wears the SAME accent as a background wash (`tint`) — so a row reads as one colour,
+        -- and the eye finds "how big" or "who owns it" without reading the labels. No row is plain text.
+        -- Accents are palette KEYS ("blue", "green", … — they track the live theme) or a literal "#rrggbb".
+        info = {
+            tint = 0.1, -- how far a key box's accent is blended toward the editor bg
+            accents = {
+                name = "blue",
+                path = "yellow",
+                type = "purple",
+                size = "green",
+                perms = "orange",
+                owner = "cyan",
+                time = "teal",
+                git = "red",
+            },
+        },
+    },
 }
 
 return M
