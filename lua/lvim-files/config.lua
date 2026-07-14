@@ -39,6 +39,7 @@
 ---@field follow boolean                reveal the current buffer's file in the tree as windows/buffers change
 ---@field auto_collapse boolean         when a file is revealed/expanded, keep only its branch open (opt-in)
 ---@field input "popup"|"native"        text prompts (rename/add): the lvim-ui popup, or Neovim's vim.ui.input
+---@field winpick boolean               `open_pick` asks lvim-winpick which window the file opens in (default true)
 ---@field title string|false            the panel winbar title (false = none)
 ---@field keys LvimFilesPanelKeys
 
@@ -113,6 +114,11 @@ local M = {
         follow = true, -- reveal + select the current buffer's file in the tree as you switch windows/buffers
         auto_collapse = false, -- OPT-IN: when a file is revealed, collapse every OTHER branch (keep only its path open)
         input = "native", -- text prompts (rename / add): "native" = Neovim's vim.ui.input (default) · "popup" = the lvim-ui input
+        -- The `open_pick` key routes through lvim-winpick: with SEVERAL windows open, it asks WHICH one the
+        -- file lands in (a letter badge per window). With exactly one candidate it opens there directly — no
+        -- prompt for a choice that has one answer. false = `open_pick` behaves like a plain open (the first
+        -- usable window), and lvim-winpick is never called.
+        winpick = true,
         title = "LVIM FILES",
         -- Windows whose buffer is a PLACEHOLDER: opening a file REPLACES them instead of splitting beside them.
         -- The start dashboard is exactly that — a scratch buffer waiting to be replaced by whatever you pick —

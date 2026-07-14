@@ -423,19 +423,47 @@ local function action_open()
 end
 
 --- Open the file under the cursor in a window chosen through lvim-winpick.
+--- The windows a file may be opened INTO: every REAL window of the tab except the panel itself — floats and
+--- chrome are out (`is_openable_win`), the placeholder dashboard is IN (that is what it is for). lvim-files
+--- owns this rule, not the picker: winpick's own filters exclude the dashboard, which is exactly the window
+--- we most want as a target.
+---@return integer[]
+local function open_targets()
+    local out = {}
+    for _, w in ipairs(api.nvim_tabpage_list_wins(0)) do
+        if w ~= state.win and api.nvim_win_get_config(w).relative == "" and is_openable_win(w) then
+            out[#out + 1] = w
+        end
+    end
+    return out
+end
+
+--- Open the file under the cursor in a window CHOSEN with lvim-winpick (`panel.winpick`). With one candidate
+--- winpick's `autoselect_one` returns it with no UI — a choice with one answer is not a question; with none,
+--- `open_file` makes a split as usual. Cancelling the pick opens nothing. With the integration off, or with
+--- lvim-winpick absent, this is a plain open.
 local function action_open_pick()
     local node = cur_node()
     if not node or model.is_dir(node) then
         return
     end
     local ok, winpick = pcall(require, "lvim-winpick")
-    if not ok then
-        vim.notify("lvim-files: lvim-winpick is not installed.", vim.log.levels.WARN)
+    if not (cfg().winpick and ok) then
         open_file(node)
         return
     end
-    -- include_current stays OFF: the "current" window is the panel itself — never a target.
-    local win = winpick.pick({})
+    local targets = open_targets()
+    if #targets == 0 then
+        open_file(node) -- nothing to pick between: the usual "make a window" path
+        return
+    end
+    -- The panel is the CURRENT window and never a target (include_current stays off); `filter_func` replaces
+    -- winpick's eligibility with OURS, so the dashboard is offered and the chrome is not.
+    local win = winpick.pick({
+        filter_func = function()
+            return targets
+        end,
+    })
     if win then
         open_file(node, win)
     end

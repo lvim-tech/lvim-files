@@ -77,6 +77,9 @@ require("lvim-files").setup({
         follow = true, -- reveal + select the current buffer's file in the tree as windows/buffers change
         auto_collapse = false, -- when a file is revealed, keep only its branch open (collapse the others)
         input = "native", -- rename/add prompt: "native" (Neovim's vim.ui.input) or "popup" (the lvim-ui input)
+        -- `open_pick` asks lvim-winpick WHICH window the file opens in (a letter badge per window). One
+        -- candidate → it opens there with no prompt. false = `open_pick` is a plain open (first usable window).
+        winpick = true,
         title = "LVIM FILES", -- the panel winbar title (false = none)
         keys = {
             open = { "<CR>", "l" }, -- expand a directory / open a file
