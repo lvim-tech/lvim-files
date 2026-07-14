@@ -30,6 +30,18 @@ function M.build()
         LvimFilesSymlink = { fg = c.cyan, italic = true },
         LvimFilesExec = { fg = c.green },
         LvimFilesCut = { fg = c.comment, strikethrough = true },
+
+        -- The `i` info popup: a KEY column (a tinted badge box, like every other key cell in the chrome) and
+        -- a VALUE coloured by what it MEANS — a path is not a size is not a permission bit. The eye should be
+        -- able to find "how big" or "who owns it" without reading the labels.
+        LvimFilesInfoKey = { fg = c.blue, bg = mtint(c.blue, 0.2), bold = true },
+        LvimFilesInfoName = { fg = c.fg, bold = true },
+        LvimFilesInfoPath = { fg = c.yellow },
+        LvimFilesInfoType = { fg = c.purple },
+        LvimFilesInfoSize = { fg = c.green },
+        LvimFilesInfoPerms = { fg = c.orange },
+        LvimFilesInfoOwner = { fg = c.comment },
+        LvimFilesInfoTime = { fg = c.cyan },
         -- tree chrome — the root header + fold carets track the directory green
         LvimFilesRoot = { fg = c.green, bg = mtint(c.green, 0.2), bold = true },
         LvimFilesGuide = { fg = hl.blend(c.fg_dark, c.bg, 0.6) },

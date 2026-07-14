@@ -114,6 +114,10 @@ local M = {
         auto_collapse = false, -- OPT-IN: when a file is revealed, collapse every OTHER branch (keep only its path open)
         input = "native", -- text prompts (rename / add): "native" = Neovim's vim.ui.input (default) · "popup" = the lvim-ui input
         title = "LVIM FILES",
+        -- Windows whose buffer is a PLACEHOLDER: opening a file REPLACES them instead of splitting beside them.
+        -- The start dashboard is exactly that — a scratch buffer waiting to be replaced by whatever you pick —
+        -- so opening a file next to it (and leaving it sitting there as a second window) is never wanted.
+        reuse_filetypes = { "lvim-dashboard" },
         keys = {
             open = { "<CR>", "l" },
             close_node = "h",
@@ -135,6 +139,7 @@ local M = {
             toggle_gitignore = "H",
             refresh = "R",
             edit_mode = "e",
+            info = "i", -- everything known about the entry under the cursor (a read-only popup)
             help = "?",
             close = "q",
         },

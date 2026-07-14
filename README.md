@@ -88,10 +88,11 @@ require("lvim-files").setup({
             add = "a", -- create (trailing "/" = directory)
             rename = "r", -- rename the entry
             delete = "d", -- delete the entry (trash-aware)
-            copy = "c", -- mark for copy
-            cut = "x", -- mark for cut (move on paste)
-            paste = "p", -- paste into the directory under the cursor
-            copy_path = "y", -- yank the absolute path
+            copy = "c", -- copy: the entry under the cursor, or the whole VISUAL selection
+            cut = "x", -- cut (moves on paste): likewise, single or selection
+            paste = "p", -- paste EVERY clipboard entry into the directory under the cursor
+            copy_path = "y", -- normal: yank the absolute path · VISUAL: copy the selected entries
+            info = "i", -- everything known about the entry (a read-only popup)
             root_up = "-", -- re-root one directory up
             root_cwd = "~", -- re-root at the current working directory
             find = "/", -- fuzzy jump in the tree (lvim-picker)
@@ -244,6 +245,20 @@ LvimFilesOpAdd / Change / Delete (+Active)     confirm panel rows
 LvimFilesOpNote                                conflict notes
 LvimFilesFilterKey / On / Off                  the filter bar buttons
 ```
+
+## Copy, cut, paste
+
+Select the rows (`V`, `j`/`k`) and press `y` (or `c`) to copy them, `x` to cut them, then `p` in the target
+directory — the whole selection lands there. Without a selection the keys act on the entry under the cursor.
+A copy stays on the clipboard (drop the same set into several directories); a cut is consumed by the paste.
+
+A name that already exists is never an error and never silently overwritten: the paste offers a free name
+(`a.txt` → `a (copy).txt`, pre-filled and editable), an explicit **Overwrite**, or **Skip** — with
+*…for all* answers so a ten-file paste is not ten questions.
+
+`i` shows everything known about the entry — path, type (a symlink's target, and whether it is broken), size
+(a directory's is its contents, walked with a cap so the popup can never hang), permissions, owner, the three
+timestamps, and its git status.
 
 ## License
 

@@ -39,7 +39,10 @@ local state = {
     seeded = false, ---@type boolean         filters seeded from config (once per session)
     show_dotfiles = true, ---@type boolean
     show_gitignore = true, ---@type boolean
-    clipboard = nil, ---@type { mode: "copy"|"cut", path: string, name: string }|nil
+    -- The file clipboard: a MODE plus the entries it holds. A list, not a single path — copying one file and
+    -- copying a visual selection of ten are the same operation, and neo-tree-style "select, y, paste" is what
+    -- a file tree is for. Entries are `{ path, name }`.
+    clipboard = nil, ---@type { mode: "copy"|"cut", items: { path: string, name: string }[] }|nil
     diag = {}, ---@type table<string, integer>  path → worst severity
     augroup = nil, ---@type integer|nil
     unsub = {}, ---@type fun()[]             model/git listener unsubscribers
@@ -210,7 +213,13 @@ end
 ---@return LvimUiTreeNode[]
 local function to_nodes(node)
     local icons = config.icons
-    local cut_path = state.clipboard and state.clipboard.mode == "cut" and state.clipboard.path or nil
+    -- Every entry that is on the CUT clipboard renders dimmed (it is about to move away).
+    local cut = {}
+    if state.clipboard and state.clipboard.mode == "cut" then
+        for _, it in ipairs(state.clipboard.items) do
+            cut[it.path] = true
+        end
+    end
     local out = {}
     for _, ch in ipairs(node.children or {}) do
         if visible(ch) then
@@ -249,7 +258,7 @@ local function to_nodes(node)
                 label = ch.name,
                 icon = glyph,
                 icon_hl = icon_hl,
-                label_hl = (cut_path == ch.path) and "LvimFilesCut" or render.name_hl(ch),
+                label_hl = cut[ch.path] and "LvimFilesCut" or render.name_hl(ch),
                 expandable = is_dir,
                 children = is_dir and function()
                     ensure_loaded(ch) -- kick the async scan; renders again when it lands
@@ -306,22 +315,35 @@ local function refresh_dir(dir)
     git.refresh(dir)
 end
 
---- A window suitable for opening files: the tracked opener, else the first normal window,
+--- Can a file be opened INTO this window? A normal file buffer, yes — and so is a PLACEHOLDER window
+--- (`config.reuse_filetypes`, the start dashboard by default): it is a scratch buffer whose whole purpose is
+--- to be replaced by the thing you pick, so opening a file beside it — and leaving it as a second window —
+--- is precisely wrong.
+---@param w integer
+---@return boolean
+local function is_openable_win(w)
+    local b = api.nvim_win_get_buf(w)
+    if vim.bo[b].buftype == "" then
+        return true
+    end
+    for _, ft in ipairs(cfg().reuse_filetypes or {}) do
+        if vim.bo[b].filetype == ft then
+            return true
+        end
+    end
+    return false
+end
+
+--- A window suitable for opening files: the tracked opener, else the first usable window,
 --- else a fresh split beside the panel.
 ---@return integer
 local function usable_window()
-    if is_valid_win(state.opener) and state.opener ~= state.win then
-        local b = api.nvim_win_get_buf(state.opener)
-        if vim.bo[b].buftype == "" then
-            return state.opener
-        end
+    if is_valid_win(state.opener) and state.opener ~= state.win and is_openable_win(state.opener) then
+        return state.opener
     end
     for _, w in ipairs(api.nvim_tabpage_list_wins(0)) do
-        if w ~= state.win and api.nvim_win_get_config(w).relative == "" then
-            local b = api.nvim_win_get_buf(w)
-            if vim.bo[b].buftype == "" then
-                return w
-            end
+        if w ~= state.win and api.nvim_win_get_config(w).relative == "" and is_openable_win(w) then
+            return w
         end
     end
     local buf = api.nvim_create_buf(true, false)
@@ -432,6 +454,144 @@ local function text_input(opts)
     end
 end
 
+--- A byte count as a human-readable size.
+---@param n integer
+---@return string
+local function human_size(n)
+    local units = { "B", "K", "M", "G", "T" }
+    local i, v = 1, n
+    while v >= 1024 and i < #units do
+        v = v / 1024
+        i = i + 1
+    end
+    return i == 1 and ("%d B"):format(v) or ("%.1f %s"):format(v, units[i])
+end
+
+--- A uv mode integer as `rwxr-xr-x`.
+---@param mode integer
+---@return string
+local function perm_string(mode)
+    local bits = { "r", "w", "x" }
+    local out = {}
+    for shift = 6, 0, -3 do
+        for b = 0, 2 do
+            local mask = 2 ^ (shift + (2 - b))
+            out[#out + 1] = (mode % (mask * 2) >= mask) and bits[b + 1] or "-"
+        end
+    end
+    return table.concat(out)
+end
+
+--- The immediate entry count and the total size of a directory tree. Bounded: a deep tree is walked only
+--- until `budget` entries, and the result says so — an info popup must never hang on `~/`.
+---@param path string
+---@param budget integer
+---@return integer entries, integer bytes, boolean truncated
+local function dir_stats(path, budget)
+    local entries, bytes, seen = 0, 0, 0
+    local stack = { path }
+    while #stack > 0 do
+        local dir = table.remove(stack)
+        local fd = uv.fs_scandir(dir)
+        if fd then
+            while true do
+                local name, kind = uv.fs_scandir_next(fd)
+                if not name then
+                    break
+                end
+                seen = seen + 1
+                if seen > budget then
+                    return entries, bytes, true
+                end
+                if dir == path then
+                    entries = entries + 1
+                end
+                local full = dir .. "/" .. name
+                if kind == "directory" then
+                    stack[#stack + 1] = full
+                else
+                    local st = uv.fs_lstat(full)
+                    bytes = bytes + ((st and st.size) or 0)
+                end
+            end
+        end
+    end
+    return entries, bytes, false
+end
+
+--- Everything known about the entry under the cursor — the neo-tree `i`. A read-only popup (the canonical
+--- `lvim-ui.info`), so it closes with `q` and never becomes another thing to manage.
+local function action_info()
+    local node = cur_node()
+    if not node then
+        return
+    end
+    local st = uv.fs_lstat(node.path)
+    if not st then
+        vim.notify("lvim-files: cannot stat " .. node.path, vim.log.levels.ERROR)
+        return
+    end
+    local when = function(sec)
+        return sec and os.date("%Y-%m-%d %H:%M:%S", sec) or "-"
+    end
+    -- Each row is a KEY box + a VALUE, and the value's colour says what KIND of fact it is (a path, a size, a
+    -- permission, a time) — so the popup can be READ at a glance instead of parsed label by label.
+    local lines, hls = {}, {}
+    ---@param k string
+    ---@param v string
+    ---@param group string?  the value's highlight (defaults to the plain fg)
+    local function row(k, v, group)
+        local label = ("  %-11s"):format(k .. ":")
+        local text = label .. " " .. v
+        local r = #lines -- 0-based row for the highlight spans
+        lines[#lines + 1] = text
+        hls[#hls + 1] = { r, 2, #label, "LvimFilesInfoKey" } -- the key box (skip the 2-space lead)
+        hls[#hls + 1] = { r, #label + 1, #text, group or "LvimFilesFile" }
+    end
+
+    local kind = st.type
+    if st.type == "link" then
+        local target = uv.fs_readlink(node.path)
+        local real = uv.fs_stat(node.path) -- follows the link
+        kind = ("link → %s%s"):format(target or "?", real and "" or "  (broken)")
+    end
+
+    lines[#lines + 1] = ""
+    row("Name", node.name, "LvimFilesInfoName")
+    row("Path", vim.fn.fnamemodify(node.path, ":~"), "LvimFilesInfoPath")
+    row("Type", kind, "LvimFilesInfoType")
+    if st.type == "directory" then
+        -- Bounded walk: a directory's SIZE is its contents, but nothing may make this popup slow.
+        local entries, bytes, truncated = dir_stats(node.path, 20000)
+        row("Entries", tostring(entries), "LvimFilesInfoSize")
+        row("Size", human_size(bytes) .. (truncated and "  (over 20k entries — partial)" or ""), "LvimFilesInfoSize")
+    else
+        row("Size", ("%s  (%d bytes)"):format(human_size(st.size), st.size), "LvimFilesInfoSize")
+    end
+    row("Perms", ("%s  (%04o)"):format(perm_string(st.mode), st.mode % 4096), "LvimFilesInfoPerms")
+    row("Owner", ("uid %d / gid %d"):format(st.uid, st.gid), "LvimFilesInfoOwner")
+    lines[#lines + 1] = ""
+    row("Modified", when(st.mtime and st.mtime.sec), "LvimFilesInfoTime")
+    row("Accessed", when(st.atime and st.atime.sec), "LvimFilesInfoTime")
+    row("Changed", when(st.ctime and st.ctime.sec), "LvimFilesInfoTime")
+    -- What the tree already knows about it, so the popup answers the same question the row's badge hints at.
+    local gs = git.status(node.path)
+    if gs and gs ~= "" then
+        lines[#lines + 1] = ""
+        row("Git", tostring(gs), "LvimFilesGitModified")
+    end
+    if git.is_ignored(node.path) then
+        row("Git", "ignored", "LvimFilesGitIgnored")
+    end
+    lines[#lines + 1] = ""
+
+    lvim_ui.info(lines, {
+        title = { icon = config.icons.info or "", text = "Info" },
+        title_pos = "center",
+        highlights = hls,
+    })
+end
+
 --- Create a file (or, with a trailing "/", a directory) under the target directory.
 local function action_add()
     local dir = target_dir()
@@ -498,41 +658,224 @@ local function action_delete()
     })
 end
 
+--- The nodes a copy/cut acts on: the VISUAL selection when there is one (that is what a selection MEANS),
+--- else the single node under the cursor. Called from both the normal-mode key and the visual-mode one, so
+--- `c`/`x` do the obvious thing in either — no separate "mark" mode to learn.
+---@param visual boolean  invoked from a visual-mode mapping (read the selected line range)
+---@return LvimFilesNode[]
+local function nodes_for_action(visual)
+    if not visual then
+        local node = cur_node()
+        return node and { node } or {}
+    end
+    -- The visual range: `v` marks are only written when visual mode ENDS, so read the LIVE selection —
+    -- the cursor and the anchor (`v`) — which is what a `x`-mode mapping sees while the selection is up.
+    local a = vim.fn.line(".")
+    local b = vim.fn.line("v")
+    if b < a then
+        a, b = b, a
+    end
+    local out, seen = {}, {}
+    for line = a, b do
+        local ui = state.panel and state.panel.node_at(line)
+        local node = ui and ui.data or nil
+        if node and not seen[node.path] then
+            seen[node.path] = true
+            out[#out + 1] = node
+        end
+    end
+    return out
+end
+
+--- Put the acted-on nodes on the clipboard (copy or cut).
 ---@param mode "copy"|"cut"
-local function action_mark(mode)
-    local node = cur_node()
-    if not node then
+---@param visual boolean?
+local function action_mark(mode, visual)
+    local nodes = nodes_for_action(visual == true)
+    if #nodes == 0 then
         return
     end
-    state.clipboard = { mode = mode, path = node.path, name = node.name }
+    local items = {}
+    for _, n in ipairs(nodes) do
+        items[#items + 1] = { path = n.path, name = n.name }
+    end
+    state.clipboard = { mode = mode, items = items }
+    if visual then
+        -- Leave visual mode: the selection has been consumed, and staying in it would let the next key
+        -- (a `p`) act on a range the user no longer sees as live.
+        vim.cmd("normal! \27")
+    end
+    local verb = mode == "copy" and "copied" or "cut"
+    vim.notify(("lvim-files: %d %s"):format(#items, verb), vim.log.levels.INFO)
     do_render()
 end
 
---- Paste the marked node into the directory under the cursor.
+--- A name that does not collide in `dir`: "a.txt" → "a (copy).txt" → "a (copy 2).txt". The suffix goes
+--- BEFORE the extension, so the file keeps its type (and its icon, and its `ft`).
+---@param dir string
+---@param name string
+---@return string
+local function free_name(dir, name)
+    if not ops.exists(model.join(dir, name)) then
+        return name
+    end
+    local stem, ext = name:match("^(.*)(%.[^.]+)$")
+    if not stem or stem == "" then
+        stem, ext = name, ""
+    end
+    for i = 1, 99 do
+        local suffix = i == 1 and " (copy)" or (" (copy " .. i .. ")")
+        local candidate = stem .. suffix .. ext
+        if not ops.exists(model.join(dir, candidate)) then
+            return candidate
+        end
+    end
+    return stem .. " (copy " .. os.time() .. ")" .. ext
+end
+
+--- Paste EVERY clipboard entry into the directory under the cursor, one at a time — because a CONFLICT has
+--- to be asked about, and asking is async. A name that already exists is never an error and never silently
+--- overwritten: it offers a free name (pre-filled, editable), an explicit overwrite, or a skip — with an
+--- "…for all" answer so a ten-file paste is not ten questions.
 local function action_paste()
     local clip = state.clipboard
-    if not clip then
+    if not clip or #clip.items == 0 then
         vim.notify("lvim-files: nothing to paste.", vim.log.levels.INFO)
         return
     end
     local dir = target_dir()
-    local dest = model.join(dir, clip.name)
-    local ok, err
-    if clip.mode == "copy" then
-        ok, err = ops.copy(clip.path, dest)
-    else
-        ok, err = ops.rename(clip.path, dest)
+    local items = vim.deepcopy(clip.items)
+    local mode = clip.mode
+    local done, skipped, failed = 0, 0, {}
+    local dirty = { [dir] = true }
+    local all -- "overwrite" | "skip" — an answer the user chose to apply to every remaining conflict
+
+    local finish, step
+
+    --- Perform ONE entry into `name` (already conflict-resolved), then continue.
+    ---@param it { path: string, name: string }
+    ---@param i integer
+    ---@param name string
+    ---@param overwrite boolean
+    local function place(it, i, name, overwrite)
+        local dest = model.join(dir, name)
+        if overwrite and ops.exists(dest) then
+            local ok_del, err_del = ops.delete(dest)
+            if not ok_del then
+                failed[#failed + 1] = ("%s (%s)"):format(it.name, err_del or "cannot replace")
+                return step(i + 1)
+            end
+        end
+        local ok, err
+        if mode == "copy" then
+            ok, err = ops.copy(it.path, dest)
+        else
+            ok, err = ops.rename(it.path, dest)
+        end
+        if ok then
+            done = done + 1
+            dirty[vim.fs.dirname(it.path)] = true
+        else
+            failed[#failed + 1] = ("%s (%s)"):format(it.name, err or "failed")
+        end
+        step(i + 1)
     end
-    if not ok then
-        vim.notify("lvim-files: " .. (err or "paste failed"), vim.log.levels.ERROR)
-        return
+
+    --- Ask what to do about `it` colliding in `dir`.
+    ---@param it { path: string, name: string }
+    ---@param i integer
+    local function ask(it, i)
+        local suggestion = free_name(dir, it.name)
+        local more = #items - i > 0
+        local choices = {
+            { label = "Keep both  →  " .. suggestion, id = "rename" },
+            { label = "Overwrite", id = "overwrite" },
+            { label = "Skip", id = "skip" },
+        }
+        if more then
+            choices[#choices + 1] = { label = "Overwrite all", id = "overwrite_all" }
+            choices[#choices + 1] = { label = "Skip all", id = "skip_all" }
+        end
+        lvim_ui.select({
+            title = it.name .. " already exists here",
+            items = choices,
+            callback = function(confirmed, idx)
+                if not confirmed then
+                    skipped = skipped + (#items - i + 1) -- cancelling the dialog cancels the whole paste
+                    return finish()
+                end
+                local id = choices[idx].id
+                if id == "skip" then
+                    skipped = skipped + 1
+                    return step(i + 1)
+                elseif id == "skip_all" then
+                    all = "skip"
+                    skipped = skipped + 1
+                    return step(i + 1)
+                elseif id == "overwrite" then
+                    return place(it, i, it.name, true)
+                elseif id == "overwrite_all" then
+                    all = "overwrite"
+                    return place(it, i, it.name, true)
+                end
+                -- Keep both: the suggested name, pre-filled and editable — the user may want their own.
+                text_input({
+                    title = "Paste as",
+                    default = suggestion,
+                    callback = function(ok, value)
+                        value = vim.trim(value or "")
+                        if not ok or value == "" then
+                            skipped = skipped + 1
+                            return step(i + 1)
+                        end
+                        place(it, i, value, false)
+                    end,
+                })
+            end,
+        })
     end
-    local src_dir = vim.fs.dirname(clip.path)
-    state.clipboard = nil
-    refresh_dir(src_dir)
-    if src_dir ~= dir then
-        refresh_dir(dir)
+
+    step = function(i)
+        local it = items[i]
+        if not it then
+            return finish()
+        end
+        local dest = model.join(dir, it.name)
+        if not ops.exists(dest) then
+            return place(it, i, it.name, false)
+        end
+        if all == "skip" then
+            skipped = skipped + 1
+            return step(i + 1)
+        elseif all == "overwrite" then
+            return place(it, i, it.name, true)
+        end
+        ask(it, i)
     end
+
+    finish = function()
+        -- A CUT is consumed by the paste (the entries moved); a COPY stays on the clipboard, so the same
+        -- selection can be dropped into several directories.
+        if mode == "cut" then
+            state.clipboard = nil
+        end
+        for d in pairs(dirty) do
+            refresh_dir(d)
+        end
+        local parts = { ("pasted %d"):format(done) }
+        if skipped > 0 then
+            parts[#parts + 1] = ("skipped %d"):format(skipped)
+        end
+        if #failed > 0 then
+            parts[#parts + 1] = ("failed %d — %s"):format(#failed, table.concat(failed, ", "))
+        end
+        vim.notify(
+            "lvim-files: " .. table.concat(parts, ", "),
+            #failed > 0 and vim.log.levels.WARN or vim.log.levels.INFO
+        )
+    end
+
+    step(1)
 end
 
 --- Yank the node's absolute path to + and the unnamed register.
@@ -837,6 +1180,7 @@ local function set_keys(map)
         toggle_gitignore = toggle_gitignore,
         refresh = action_refresh,
         edit_mode = action_edit_mode,
+        info = action_info,
         help = show_help,
         close = M.close,
     }
@@ -844,6 +1188,34 @@ local function set_keys(map)
         local fn = actions[action]
         if fn then
             map(lhs, fn)
+        end
+    end
+
+    -- copy / cut in VISUAL mode: select the rows, press the key, then `p` in the target directory. That is the
+    -- whole point of a selection, and it is what a file tree is expected to do — the edit buffer is for a real
+    -- refactor, not for moving two files. The tree's own `map` is normal-mode only (it owns j/k/<CR>/…), so
+    -- these are bound straight on the panel buffer.
+    --
+    -- `copy_path` (`y`) is included ON PURPOSE: with a SELECTION up, `y` universally means "copy THESE" — that
+    -- is the neo-tree reflex, and letting it fall through to Vim's own line-yank silently copied the rendered
+    -- TEXT of the rows while the file clipboard kept whatever was in it before, so a later `p` pasted the wrong
+    -- thing. In NORMAL mode `y` keeps its meaning (yank the path to the registers) — there is no selection
+    -- there to copy.
+    if state.buf and api.nvim_buf_is_valid(state.buf) then
+        local keys = cfg().keys or {}
+        for action, mode in pairs({ copy = "copy", copy_path = "copy", cut = "cut" }) do
+            for _, lhs in ipairs(type(keys[action]) == "table" and keys[action] or { keys[action] }) do
+                if type(lhs) == "string" and lhs ~= "" then
+                    vim.keymap.set("x", lhs, function()
+                        action_mark(mode, true)
+                    end, {
+                        buffer = state.buf,
+                        nowait = true,
+                        silent = true,
+                        desc = "lvim-files: " .. mode .. " the selected entries",
+                    })
+                end
+            end
         end
     end
 end
