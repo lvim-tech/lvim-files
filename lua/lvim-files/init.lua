@@ -98,6 +98,12 @@ function M.setup(opts)
     end
     registered = true
     uhl.bind(highlights.build)
+    -- Self-register the tree panel's filetype for cursor hiding — a PERSISTENT side panel (hide the cursor
+    -- ONLY while it is the current window). `cursor.register` extends the registry at runtime without
+    -- rebuilding the autocmds, so installing lvim-files needs no entry in the central cursor config.
+    pcall(function()
+        require("lvim-utils.cursor").register({ panel_ft = { "lvim-files" } })
+    end)
     vim.api.nvim_create_user_command("LvimFiles", dispatch, {
         nargs = "*",
         complete = complete,
