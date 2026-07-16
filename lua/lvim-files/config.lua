@@ -38,6 +38,9 @@
 ---@field focus_on_open boolean         move the cursor into the tree when it opens
 ---@field follow boolean                reveal the current buffer's file in the tree as windows/buffers change
 ---@field auto_collapse boolean         when a file is revealed/expanded, keep only its branch open (opt-in)
+---@field mouse_open "single"|"double"  a mouse click that opens a file / expands a directory: a SINGLE click, or
+---                                     (default) a DOUBLE click — with "double" a single click only selects the
+---                                     row. Keyboard `open` (`l`/`<CR>`) is unaffected.
 ---@field input "popup"|"native"        text prompts (rename/add): the lvim-ui popup, or Neovim's vim.ui.input
 ---@field winpick boolean               `open_pick` asks lvim-winpick which window the file opens in (default true)
 ---@field title string|false            the panel winbar title (false = none)
@@ -113,6 +116,7 @@ local M = {
         focus_on_open = true, -- move the cursor INTO the tree when it opens (else focus stays in the editor)
         follow = true, -- reveal + select the current buffer's file in the tree as you switch windows/buffers
         auto_collapse = false, -- OPT-IN: when a file is revealed, collapse every OTHER branch (keep only its path open)
+        mouse_open = "double", -- a mouse click that opens a file / expands a directory: "double" (default) or "single". With "double" a single click only SELECTS the row; keyboard open (l / <CR>) is unaffected.
         input = "native", -- text prompts (rename / add): "native" = Neovim's vim.ui.input (default) · "popup" = the lvim-ui input
         -- The `open_pick` key routes through lvim-winpick: with SEVERAL windows open, it asks WHICH one the
         -- file lands in (a letter badge per window). With exactly one candidate it opens there directly — no

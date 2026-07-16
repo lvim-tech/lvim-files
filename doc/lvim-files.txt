@@ -142,9 +142,13 @@ Opening the panel moves the cursor INTO the tree (`panel.focus_on_open`, default
 true). With `panel.follow` (default true) the tree reveals + selects the current
 buffer's file as you switch windows or buffers, expanding parents as needed.
 `panel.auto_collapse` (opt-in) keeps only ONE branch open — the current file's /
-cursor's — collapsing the others as you move between subtrees. `panel.input` chooses the rename/add prompt ("native" = Neovim vim.ui.input, default; "popup" = the lvim-ui input). `panel.close_if_last`
-(opt-in) closes the tree when it would be left as the last window, so it never
-blocks a quit.
+cursor's — collapsing the others as you move between subtrees. `panel.mouse_open`
+("double", default, or "single") sets whether a file opens / a directory expands on
+a DOUBLE mouse click (a single click then only selects the row) or a single click;
+the keyboard `open` key (`l`/`<CR>`) always activates regardless. `panel.input`
+chooses the rename/add prompt ("native" = Neovim vim.ui.input, default; "popup" =
+the lvim-ui input). `panel.close_if_last` (opt-in) closes the tree when it would be
+left as the last window, so it never blocks a quit.
 
 Directories are painted GREEN (a hidden `.dir` a dimmer green); files, symlinks
 and git / diagnostic badges follow the palette. All groups are `LvimFiles*` and

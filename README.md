@@ -76,6 +76,7 @@ require("lvim-files").setup({
         focus_on_open = true, -- move the cursor into the tree when it opens
         follow = true, -- reveal + select the current buffer's file in the tree as windows/buffers change
         auto_collapse = false, -- when a file is revealed, keep only its branch open (collapse the others)
+        mouse_open = "double", -- mouse click that opens a file / expands a dir: "double" (default) or "single". With "double" a single click only selects the row; keyboard open (l / <CR>) is unaffected.
         input = "native", -- rename/add prompt: "native" (Neovim's vim.ui.input) or "popup" (the lvim-ui input)
         -- `open_pick` asks lvim-winpick WHICH window the file opens in (a letter badge per window). One
         -- candidate → it opens there with no prompt. false = `open_pick` is a plain open (first usable window).

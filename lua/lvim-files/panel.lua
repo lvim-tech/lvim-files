@@ -1409,6 +1409,8 @@ function M.open(enter, path)
         end,
         filetype = "lvim-files", -- register this in the user's cursor `panel_ft` list
         cursorline = true,
+        double_click = config.panel.mouse_open == "double", -- a single click then only selects; double click opens/expands
+
         size = function()
             local width = pc.width or 34
             local px = (width <= 1) and math.floor(vim.o.columns * width) or math.floor(width)
