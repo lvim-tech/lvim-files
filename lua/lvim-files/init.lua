@@ -104,6 +104,21 @@ function M.setup(opts)
     pcall(function()
         require("lvim-utils.cursor").register({ panel_ft = { "lvim-files" } })
     end)
+    -- Self-register a gx adapter so `gx` on a tree row resolves the entry's REAL path (with its dir
+    -- context) instead of falling back to gx's proximity scan of the rendered row. Optional: pcall
+    -- keeps lvim-common a soft dependency, and register_adapter is load-order-independent.
+    pcall(function()
+        require("lvim-common.gx").register_adapter({
+            name = "lvim_files",
+            ---@param ctx { filetype: string }
+            detect = function(ctx)
+                return ctx.filetype == "lvim-files"
+            end,
+            get = function()
+                return M.entry_under_cursor()
+            end,
+        })
+    end)
     vim.api.nvim_create_user_command("LvimFiles", dispatch, {
         nargs = "*",
         complete = complete,
@@ -144,6 +159,14 @@ end
 ---@param dir? string
 function M.edit(dir)
     require("lvim-files.edit").open(dir)
+end
+
+--- The fs entry under the tree-panel cursor, as a `{ path, type }` descriptor (nil on the
+--- header/empty rows or when the panel is closed). Public seam for external "open under cursor"
+--- integrations — lvim-common's gx uses it via the self-registered `lvim_files` adapter.
+---@return { path: string, type: "dir"|"file" }|nil
+function M.entry_under_cursor()
+    return require("lvim-files.panel").entry_under_cursor()
 end
 
 return M

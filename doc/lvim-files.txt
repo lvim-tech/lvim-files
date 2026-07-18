@@ -219,7 +219,16 @@ Each applied operation fires a |User| autocmd with the paths in `data`:
   files.focus()            -- focus the panel (opening it if needed)
   files.reveal(path)       -- expand to + select an absolute path
   files.edit(dir)          -- open the edit view on a directory
+  files.entry_under_cursor() -- { path, type } of the entry under the panel
+                             -- cursor (nil off a row); the seam gx uses
 <
+
+On setup() lvim-files self-registers a gx adapter with lvim-common (via
+`require("lvim-common.gx").register_adapter(...)`, guarded — lvim-common is
+optional). With both installed, `gx` on a tree row resolves the entry's real
+path through entry_under_cursor() and opens it, instead of falling back to
+gx's proximity scan of the rendered row.
+
 ==============================================================================
 9. CURSOR INTEGRATION                           *lvim-files-cursor*
 

@@ -300,6 +300,17 @@ local function cur_node()
     return ui and ui.data or nil
 end
 
+--- The fs entry under the panel cursor as a gx-style descriptor (nil on the header/empty rows).
+--- Public seam for external "open under cursor" integrations (lvim-common's gx adapter).
+---@return { path: string, type: "dir"|"file" }|nil
+function M.entry_under_cursor()
+    local node = cur_node()
+    if not node then
+        return nil
+    end
+    return { path = node.path, type = model.is_dir(node) and "dir" or "file" }
+end
+
 --- The directory an add/paste under the cursor targets: the node itself when it is a
 --- directory, else its parent (the root on the header rows).
 ---@return string
@@ -570,8 +581,12 @@ local function action_info()
         vim.notify("lvim-files: cannot stat " .. node.path, vim.log.levels.ERROR)
         return
     end
+    -- `os.date` with a non-`*t` format ALWAYS returns a string at runtime, but its declared return is the
+    -- `string|osdate` union; `tostring` pins it to `string` so the row builder's value concatenation is clean.
+    ---@param sec integer?
+    ---@return string
     local when = function(sec)
-        return sec and os.date("%Y-%m-%d %H:%M:%S", sec) or "-"
+        return sec and tostring(os.date("%Y-%m-%d %H:%M:%S", sec)) or "-"
     end
     -- Each row is a KEY box + a VALUE, and the value's colour says what KIND of fact it is (a path, a size, a
     -- permission, a time) — so the popup can be READ at a glance instead of parsed label by label.

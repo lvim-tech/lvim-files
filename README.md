@@ -238,6 +238,15 @@ LvimFilesDelete   { path, method }  (method = "trash" | "delete")
 | `require("lvim-files").focus()`            | focus the panel (opening it if needed)     |
 | `require("lvim-files").reveal(path)`       | expand to + select a path in the tree      |
 | `require("lvim-files").edit(dir?)`         | open the edit view on a directory          |
+| `require("lvim-files").entry_under_cursor()` | `{ path, type }` of the entry under the panel cursor (nil off a row) |
+
+## gx integration
+
+On `setup()` lvim-files self-registers a file-manager adapter with **lvim-common**'s `gx` (via
+`require("lvim-common.gx").register_adapter(...)`, guarded — lvim-common is optional). With both
+installed, `gx` on a tree row resolves the entry's real path through `entry_under_cursor()` and
+opens it (a directory per `gx`'s `dir_open_strategy`) instead of falling back to gx's proximity
+scan of the rendered row.
 
 ## Cursor integration
 
