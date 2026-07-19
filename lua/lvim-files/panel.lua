@@ -528,6 +528,22 @@ local function text_input(opts)
     end
 end
 
+--- A yes/no confirm — through Neovim's `vim.ui.input` (`input="native"`: a `(y/N)` command-line prompt,
+--- rendered by the lvim-hud cmdline when that is the hud's target) or the lvim-ui confirm popup
+--- (`input="popup"`), per config. Same routing as `text_input`. The callback is `(yes)` either way; any
+--- answer other than y / yes (including an empty line or a cancel) is NO.
+---@param opts { title: string, default_no?: boolean, callback: fun(yes: boolean) }
+local function confirm(opts)
+    if cfg().input == "native" then
+        vim.ui.input({ prompt = opts.title .. " (y/N): " }, function(val)
+            local ans = val and vim.trim(val):lower() or ""
+            opts.callback(ans == "y" or ans == "yes")
+        end)
+    else
+        lvim_ui.confirm(opts)
+    end
+end
+
 --- A byte count as a human-readable size.
 ---@param n integer
 ---@return string
@@ -781,7 +797,7 @@ local function action_delete()
         return
     end
     local verb = ops.uses_trash() and "Trash" or "Delete"
-    lvim_ui.confirm({
+    confirm({
         title = verb .. " " .. node.name .. "?",
         default_no = true,
         callback = function(yes)
