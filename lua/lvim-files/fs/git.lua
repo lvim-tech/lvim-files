@@ -328,6 +328,21 @@ function M.is_ignored(path)
     return false
 end
 
+--- Release all per-repository state: stop + close every root's debounce timer and drop the status /
+--- ignored / dirsev maps. Called from a view's teardown so a long session does not accumulate a root
+--- (with a live uv timer) for every repository it ever decorated. The toplevel cache is kept — it is a
+--- cheap, stable memo — and listeners are owned by their subscribers' own `on_change` unsubscribers.
+--- A subsequent `M.refresh` re-creates the roots it needs, so this is safe to call while a view is open.
+function M.reset()
+    for _, r in pairs(roots) do
+        r.timer:stop()
+        if not r.timer:is_closing() then
+            r.timer:close()
+        end
+    end
+    roots = {}
+end
+
 --- Subscribe to completed status refreshes (`fn(toplevel)`). Returns an unsubscribe.
 ---@param fn fun(top: string)
 ---@return fun()

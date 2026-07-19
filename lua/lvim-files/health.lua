@@ -53,10 +53,27 @@ function M.check()
         end
     end
 
-    health.info(
-        'Register the panel filetype in the cursor module: panel_ft = { "lvim-files" } '
-            .. "(lvim-utils cursor setup) so the hardware cursor hides while the panel is focused."
-    )
+    -- The panel self-registers its filetype for cursor hiding from setup() (cursor.register mirrors it into
+    -- the live config.cursor.panel_ft registry), so no central-config edit is needed. Probe that registry
+    -- rather than telling the user to hand-register it — the manual step is stale after self-registration.
+    local ok_cfg, ucfg = pcall(require, "lvim-utils.config")
+    local registered = false
+    if ok_cfg and type(ucfg.cursor) == "table" and type(ucfg.cursor.panel_ft) == "table" then
+        for _, ft in ipairs(ucfg.cursor.panel_ft) do
+            if ft == "lvim-files" then
+                registered = true
+                break
+            end
+        end
+    end
+    if registered then
+        health.ok('panel filetype "lvim-files" self-registered for cursor hiding (panel_ft)')
+    else
+        health.info(
+            'panel filetype "lvim-files" not yet registered — it self-registers on setup(); '
+                .. 'run require("lvim-files").setup() (or open the panel once) to enable cursor hiding.'
+        )
+    end
 end
 
 return M

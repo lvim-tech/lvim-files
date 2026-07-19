@@ -28,7 +28,7 @@ local M = {}
 local next_id = 1
 ---@type table<integer, LvimFilesNode>
 local by_id = {}
----@type table<string, { event: uv.uv_fs_event_t, timer: uv.uv_timer_t, refs: integer, node: LvimFilesNode }>
+---@type table<string, { event: uv.uv_fs_event_t, timer: uv.uv_timer_t, nodes: table<integer, LvimFilesNode>, count: integer }>
 local watchers = {}
 ---@type table<integer, fun(node: LvimFilesNode)>
 local listeners = {}
@@ -287,7 +287,12 @@ function M.watch(node)
     end
     local w = watchers[node.path]
     if w then
-        w.refs = w.refs + 1
+        -- A path can be watched by MORE THAN ONE node (two views over the same directory). Keep the
+        -- whole SET of registrant nodes, keyed by id, not just the first — see the rescan note below.
+        if not w.nodes[node.id] then
+            w.nodes[node.id] = node
+            w.count = w.count + 1
+        end
         return
     end
     local event = uv.new_fs_event()
@@ -295,7 +300,7 @@ function M.watch(node)
     if not (event and timer) then
         return
     end
-    w = { event = event, timer = timer, refs = 1, node = node }
+    w = { event = event, timer = timer, nodes = { [node.id] = node }, count = 1 }
     watchers[node.path] = w
     event:start(node.path, {}, function()
         -- Coalesce a burst of events into one rescan; the timer callback hops to the main loop.
@@ -304,8 +309,16 @@ function M.watch(node)
             WATCH_DEBOUNCE_MS,
             0,
             vim.schedule_wrap(function()
-                if watchers[node.path] == w and by_id[w.node.id] then
-                    M.load(w.node, emit, true)
+                if watchers[node.path] ~= w then
+                    return
+                end
+                -- Rescan every STILL-VALID registered node. Storing a single node would silently stop
+                -- rescans for a surviving reference once that one node's subtree was released (its id
+                -- gone from by_id) — re-resolving per event keeps every live view on the path refreshed.
+                for id, n in pairs(w.nodes) do
+                    if by_id[id] then
+                        M.load(n, emit, true)
+                    end
                 end
             end)
         )
@@ -319,8 +332,11 @@ function M.unwatch(node)
     if not w then
         return
     end
-    w.refs = w.refs - 1
-    if w.refs > 0 then
+    if w.nodes[node.id] then
+        w.nodes[node.id] = nil
+        w.count = w.count - 1
+    end
+    if w.count > 0 then
         return
     end
     watchers[node.path] = nil

@@ -104,17 +104,23 @@ function M.setup(opts)
     pcall(function()
         require("lvim-utils.cursor").register({ panel_ft = { "lvim-files" } })
     end)
-    -- Self-register a gx adapter so `gx` on a tree row resolves the entry's REAL path (with its dir
-    -- context) instead of falling back to gx's proximity scan of the rendered row. Optional: pcall
-    -- keeps lvim-common a soft dependency, and register_adapter is load-order-independent.
+    -- Self-register a gx adapter so `gx` resolves the entry's REAL path (with its dir context) instead of
+    -- falling back to gx's proximity scan of the rendered row. It covers BOTH presentations: the tree panel
+    -- (ft `lvim-files`) and the edit view (ft `lvim-files-edit`) — each has a precise node-under-cursor seam,
+    -- so `get` routes by filetype. Optional: pcall keeps lvim-common a soft dependency, and register_adapter
+    -- is load-order-independent.
     pcall(function()
         require("lvim-common.gx").register_adapter({
             name = "lvim_files",
             ---@param ctx { filetype: string }
             detect = function(ctx)
-                return ctx.filetype == "lvim-files"
+                return ctx.filetype == "lvim-files" or ctx.filetype == "lvim-files-edit"
             end,
-            get = function()
+            ---@param ctx { filetype: string }
+            get = function(ctx)
+                if ctx.filetype == "lvim-files-edit" then
+                    return require("lvim-files.edit").entry_under_cursor()
+                end
                 return M.entry_under_cursor()
             end,
         })

@@ -25,6 +25,7 @@
 ---@field toggle_gitignore string|string[]  toggle the gitignore filter
 ---@field refresh string|string[]       rescan the tree (and git status)
 ---@field edit_mode string|string[]     open the EDIT view on the directory under the cursor
+---@field info string|string[]          show everything known about the entry (a read-only popup)
 ---@field help string|string[]          show the keymap cheatsheet
 ---@field close string|string[]         close the panel
 
@@ -44,6 +45,7 @@
 ---@field input "popup"|"native"        text prompts (rename/add): the lvim-ui popup, or Neovim's vim.ui.input
 ---@field winpick boolean               `open_pick` asks lvim-winpick which window the file opens in (default true)
 ---@field title string|false            the panel winbar title (false = none)
+---@field reuse_filetypes string[]      placeholder-window filetypes a file opens INTO instead of splitting beside
 ---@field keys LvimFilesPanelKeys
 
 ---@class LvimFilesEditKeys
@@ -90,8 +92,16 @@
 ---@field dir_open string               fallback open-directory icon
 ---@field file string                   fallback file icon
 ---@field symlink string                symlink marker (after the name)
+---@field info string                   the `i` info popup's title icon
 ---@field git LvimFilesGitIcons
 ---@field diag LvimFilesDiagIcons
+
+---@class LvimFilesInfoColors
+---@field tint number                   how far a key box's accent is blended toward the editor bg
+---@field accents table<string, string> info-row accent per fact kind (palette key or "#rrggbb")
+
+---@class LvimFilesColorsConfig
+---@field info LvimFilesInfoColors      the `i` info popup's per-row accents
 
 ---@class LvimFilesConfig
 ---@field panel LvimFilesPanelConfig
@@ -102,6 +112,7 @@
 ---@field hijack_netrw boolean          open directory buffers in the EDIT view instead of netrw
 ---@field lsp_rename boolean            ask LSP `workspace/willRenameFiles` before rename/move
 ---@field icons LvimFilesIcons
+---@field colors LvimFilesColorsConfig
 local M = {
     panel = {
         width = 34,
@@ -185,6 +196,7 @@ local M = {
         dir_open = "", -- nf-fa-folder_open
         file = "", -- nf-fa-file
         symlink = "", -- nf-oct-file_symlink_file
+        info = "", -- nf-fa-info_circle (the `i` info popup title)
         git = {
             added = "", -- nf-fa-plus
             modified = "", -- nf-oct-dot_fill

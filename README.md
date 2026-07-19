@@ -71,6 +71,8 @@ require("lvim-files").setup({
     panel = {
         width = 34, -- columns (>1) or a fraction of the screen (<=1)
         side = "left", -- "left" | "right"
+        padding = { left = 1, right = 1 }, -- blank columns around the tree rows (title band excluded)
+        scrollbar = false, -- right-edge thumb while the tree overflows the window
         auto_close_on_open = false, -- close the panel after opening a file through it
         close_if_last = false, -- close the tree when it would be the last window in the tab
         focus_on_open = true, -- move the cursor into the tree when it opens
@@ -82,6 +84,9 @@ require("lvim-files").setup({
         -- candidate → it opens there with no prompt. false = `open_pick` is a plain open (first usable window).
         winpick = true,
         title = "LVIM FILES", -- the panel winbar title (false = none)
+        -- Placeholder-window filetypes: a file opens INTO such a window (the start dashboard) instead of
+        -- splitting beside it.
+        reuse_filetypes = { "lvim-dashboard" },
         keys = {
             open = { "<CR>", "l" }, -- expand a directory / open a file
             close_node = "h", -- collapse, or jump to the parent row
@@ -104,7 +109,7 @@ require("lvim-files").setup({
             toggle_gitignore = "H", -- toggle the git-ignored filter
             refresh = "R", -- rescan the tree + git status
             edit_mode = "e", -- open the EDIT view on the directory
-            help = "?", -- the keymap cheatsheet
+            help = "g?", -- the keymap cheatsheet (the set-wide chord)
             close = "q", -- close the panel
         },
     },
@@ -137,6 +142,7 @@ require("lvim-files").setup({
         dir_open = vim.fn.nr2char(0xF07C, 1), --   fallback open directory
         file = vim.fn.nr2char(0xF15B, 1), --   fallback file icon
         symlink = vim.fn.nr2char(0xF481, 1), --   symlink marker
+        info = vim.fn.nr2char(0xF05A, 1), --    the `i` info popup title
         git = {
             added = vim.fn.nr2char(0xF067, 1), -- 
             modified = vim.fn.nr2char(0xF444, 1), -- 
@@ -244,23 +250,21 @@ LvimFilesDelete   { path, method }  (method = "trash" | "delete")
 
 On `setup()` lvim-files self-registers a file-manager adapter with **lvim-common**'s `gx` (via
 `require("lvim-common.gx").register_adapter(...)`, guarded — lvim-common is optional). With both
-installed, `gx` on a tree row resolves the entry's real path through `entry_under_cursor()` and
-opens it (a directory per `gx`'s `dir_open_strategy`) instead of falling back to gx's proximity
-scan of the rendered row.
+installed, `gx` resolves the entry's real path (with its directory context) and opens it (a
+directory per `gx`'s `dir_open_strategy`) instead of falling back to gx's proximity scan of the
+rendered row. The adapter covers **both** presentations — the tree panel (filetype `lvim-files`,
+via `entry_under_cursor()`) and the edit view (filetype `lvim-files-edit`, via its own
+`entry_under_cursor()`).
 
 ## Cursor integration
 
-The panel buffer's filetype is `lvim-files`. Register it as a persistent-panel
-filetype with the lvim-utils cursor module so the hardware cursor hides while
-the panel is focused (and stays visible in the code beside it):
+The panel buffer's filetype is `lvim-files`, a persistent side panel: `setup()` **self-registers**
+it with the lvim-utils cursor module (`cursor.register({ panel_ft = { "lvim-files" } })`), so the
+hardware cursor hides while the panel is the current window and stays visible in the code beside it
+— no central-config edit is needed. `:checkhealth lvim-files` confirms the registration.
 
-```lua
-require("lvim-utils.cursor").setup({
-    panel_ft = { "lvim-files" },
-})
-```
-
-The edit view keeps a visible cursor (it is a real editing buffer).
+The edit view (`lvim-files-edit`) hides the cursor in normal/visual mode (the cursorline marks the
+row) and shows it again in insert mode — it is an editing buffer.
 
 ## Highlights
 

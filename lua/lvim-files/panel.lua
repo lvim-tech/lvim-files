@@ -21,7 +21,6 @@ local ops = require("lvim-files.fs.ops")
 local render = require("lvim-files.render")
 local surface = require("lvim-ui.surface")
 local lvim_ui = require("lvim-ui")
-local uhl = require("lvim-utils.highlight")
 
 local api = vim.api
 local uv = vim.uv
@@ -356,6 +355,28 @@ local function is_openable_win(w)
     return false
 end
 
+--- A blank buffer for a freshly split window: REUSE an existing empty, unmodified, unnamed normal buffer
+--- when one is around, so repeated open-file flows in a float-only layout do not accumulate a new
+--- `[No Name]` buffer each time (`:edit` abandons the split's placeholder, and a listed one lingers in
+--- `:ls`). Only a fresh, untouched scratch qualifies — never a buffer the user is actually working in.
+---@return integer
+local function blank_buffer()
+    for _, b in ipairs(api.nvim_list_bufs()) do
+        if
+            b ~= state.buf
+            and api.nvim_buf_is_loaded(b)
+            and api.nvim_buf_get_name(b) == ""
+            and vim.bo[b].buftype == ""
+            and not vim.bo[b].modified
+            and api.nvim_buf_line_count(b) == 1
+            and api.nvim_buf_get_lines(b, 0, 1, false)[1] == ""
+        then
+            return b
+        end
+    end
+    return api.nvim_create_buf(true, false)
+end
+
 --- A window suitable for opening files: the tracked opener, else the first usable window,
 --- else a fresh split beside the panel.
 ---@return integer
@@ -368,8 +389,11 @@ local function usable_window()
             return w
         end
     end
-    local buf = api.nvim_create_buf(true, false)
-    return api.nvim_open_win(buf, false, { split = cfg().side == "left" and "right" or "left", win = state.win })
+    return api.nvim_open_win(
+        blank_buffer(),
+        false,
+        { split = cfg().side == "left" and "right" or "left", win = state.win }
+    )
 end
 
 --- Open a file node, honouring `auto_close_on_open`. `how` picks the target: nil/"edit" reuses `win`
@@ -646,6 +670,65 @@ local function action_info()
         title = { icon = config.icons.info or "", text = "Info" },
         title_pos = "center",
         highlights = hls,
+        -- Read-only metadata: CONFINE the cursor to the current row's VALUE (the right column). It never sits
+        -- left of the value column, never past the line end, and never WRAPS to another row — only j/k change
+        -- rows (so you read / yank a value without the cursor drifting onto a KEY box or the next line). The
+        -- value column is fixed by the `row` format ("  " + `%-11s` key box + one space = column 14).
+        on_open = function(buf, win)
+            local VAL = 14
+            local function ll()
+                local pos = vim.api.nvim_win_get_cursor(win)
+                return #(vim.api.nvim_buf_get_lines(buf, pos[1] - 1, pos[1], false)[1] or ""), pos
+            end
+            local function set_col(c)
+                local _, pos = ll()
+                pcall(vim.api.nvim_win_set_cursor, win, { pos[1], c })
+            end
+            -- Bind in NORMAL and VISUAL (`x`): selecting a value with `v` + `l` must stop at the line end too,
+            -- not wrap down. The lua callbacks move the (visual) cursor via nvim_win_set_cursor, which keeps the
+            -- visual selection (anchor → cursor) intact.
+            local function map(keys, fn)
+                for _, k in ipairs(keys) do
+                    vim.keymap.set({ "n", "x" }, k, fn, { buffer = buf, nowait = true, silent = true })
+                end
+            end
+            -- RIGHT: within the line only (never wrap to the next row). LEFT: not below the value column.
+            map({ "l", "<Right>", "<Space>" }, function()
+                local len, pos = ll()
+                if pos[2] < len - 1 then
+                    set_col(pos[2] + 1)
+                end
+            end)
+            map({ "h", "<Left>", "<BS>" }, function()
+                local _, pos = ll()
+                if pos[2] > VAL then
+                    set_col(pos[2] - 1)
+                end
+            end)
+            map({ "0", "^", "<Home>" }, function()
+                set_col(VAL)
+            end)
+            -- j/k keep their vertical move; this lands them on the value column (blank lines stay at col 0 —
+            -- they carry no key box, so nothing left to guard there).
+            vim.api.nvim_create_autocmd("CursorMoved", {
+                buffer = buf,
+                callback = function()
+                    if not (win and vim.api.nvim_win_is_valid(win)) then
+                        return
+                    end
+                    local len, pos = ll()
+                    if len > VAL and pos[2] < VAL then
+                        set_col(VAL)
+                    end
+                end,
+            })
+            for i, l in ipairs(lines) do
+                if #l > VAL then
+                    pcall(vim.api.nvim_win_set_cursor, win, { i, VAL })
+                    break
+                end
+            end
+        end,
     })
 end
 
@@ -817,6 +900,18 @@ local function action_paste()
     local function place(it, i, name, overwrite)
         local dest = model.join(dir, name)
         if overwrite and ops.exists(dest) then
+            -- Overwrite deletes `dest` to make room — but NEVER when `dest` is the source itself, sits
+            -- inside it, or contains it: on the no-trash path `ops.delete` is a hard `rm -rf`, so deleting
+            -- any of those destroys the very entry we are about to copy/move (hard data loss). `step()`
+            -- already routes a self-collision away from Overwrite; this is the belt at the apply seam.
+            if
+                dest == it.path
+                or dest:sub(1, #it.path + 1) == it.path .. "/"
+                or it.path:sub(1, #dest + 1) == dest .. "/"
+            then
+                failed[#failed + 1] = ("%s (refusing to overwrite the source)"):format(it.name)
+                return step(i + 1)
+            end
             local ok_del, err_del = ops.delete(dest)
             if not ok_del then
                 failed[#failed + 1] = ("%s (%s)"):format(it.name, err_del or "cannot replace")
@@ -898,6 +993,17 @@ local function action_paste()
             return finish()
         end
         local dest = model.join(dir, it.name)
+        -- Self-paste: the destination IS the source (pasting into the entry's own directory). The only
+        -- meaningful self-paste is a DUPLICATE, so a COPY routes straight to a free name (never the conflict
+        -- dialog — its Overwrite would delete the source before copying it). A CUT into the same directory is
+        -- a move onto itself, i.e. a no-op — skip it.
+        if dest == it.path then
+            if mode == "cut" then
+                skipped = skipped + 1
+                return step(i + 1)
+            end
+            return place(it, i, free_name(dir, it.name), false)
+        end
         if not ops.exists(dest) then
             return place(it, i, it.name, false)
         end
@@ -1019,12 +1125,15 @@ local function action_find()
         return
     end
     local items = {}
-    local base = #state.root.path + 2
+    -- The path prefix to strip for the display label. `#root.path + 2` assumes root has no trailing slash
+    -- and one more for the separator — but for the filesystem root (`path == "/"`, length 1) that is 3, which
+    -- chops the first character of every name (`/etc` → "tc"). Mirror the prefix logic used everywhere else.
+    local prefix = state.root.path == "/" and "/" or (state.root.path .. "/")
     ---@param node LvimFilesNode
     local function collect(node)
         for _, ch in ipairs(node.children or {}) do
             if visible(ch) then
-                items[#items + 1] = { text = ch.path:sub(base), path = ch.path }
+                items[#items + 1] = { text = ch.path:sub(#prefix + 1), path = ch.path }
                 if ch.loaded then
                     collect(ch)
                 end
@@ -1076,6 +1185,7 @@ local HELP = {
     { "add", "create (…/ = directory)" },
     { "rename", "rename" },
     { "delete", "delete (trash-aware)" },
+    { "info", "entry info popup" },
     { "copy", "mark for copy" },
     { "cut", "mark for cut" },
     { "paste", "paste into directory" },
@@ -1226,7 +1336,11 @@ local function setup_autocmds()
                 if #api.nvim_list_tabpages() > 1 then
                     M.close()
                 else
-                    vim.cmd("quit")
+                    -- Last real window in the last tab: a bare `:quit` throws E162 when a modified hidden
+                    -- buffer exists, and that error escapes the scheduled WinClosed callback (leaving the
+                    -- tree half-closed). `confirm quit` turns it into an interactive save prompt instead; the
+                    -- pcall keeps any other quit refusal (E37/…) from bubbling out of the autocmd.
+                    pcall(vim.cmd, "confirm quit")
                 end
             end)
         end,
@@ -1504,6 +1618,13 @@ function M.open(enter, path)
                 pcall(unsub)
             end
             state.unsub = {}
+            -- Release the git roots (per-repo status maps + their debounce timers) so a long session does
+            -- not keep one alive for every repository the tree ever decorated. Skip it while the edit view is
+            -- still open — it shares the same git cache; its next refresh would rebuild it, but there is no
+            -- reason to churn it out from under a live view.
+            if not require("lvim-files.edit").is_open() then
+                git.reset()
+            end
             state.win, state.buf, state.root, state.panel, state.surface = nil, nil, nil, nil, nil
         end,
     })

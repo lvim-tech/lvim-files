@@ -33,7 +33,7 @@ local NS_HL = api.nvim_create_namespace("LvimFilesEditHl") -- icon / name decora
 ---@class LvimFilesEditViewState
 ---@field node LvimFilesNode                     the directory's model root
 ---@field base table<integer, { name: string, type: string }>  node id → identity as rendered
----@field snapshot? { lines: string[], ids: table<integer, integer> }  pending text (set on leave)
+---@field snapshot? { lines: string[], ids: table<integer, integer>, spans: table<integer, table[]> }  pending text + decorations (set on leave)
 
 ---@class LvimFilesEditState
 local state = {
@@ -46,6 +46,7 @@ local state = {
     views = {}, ---@type table<string, LvimFilesEditViewState>
     yanks = {}, ---@type table<string, { path: string, dir: boolean }>  raw line text → source
     opener = nil, ---@type integer|nil      the window the view opened from
+    opening = false, ---@type string|false  a dir while an open() is mid-scan (its surface not built yet)
     augroup = nil, ---@type integer|nil
     show_dotfiles = true, ---@type boolean  filter: show entries whose name starts with "."
     show_gitignore = true, ---@type boolean filter: show git-ignored entries
@@ -587,6 +588,19 @@ local function cursor_node()
     return id and model.node(id) or nil
 end
 
+--- The fs entry under the edit-view cursor as a gx-style descriptor (nil on a created / not-yet-applied
+--- line). Public seam for external "open under cursor" integrations — the edit buffer (ft
+--- `lvim-files-edit`) has the same precise node seam as the tree, so gx routes here instead of scanning
+--- the rendered `icon name` text with no directory context.
+---@return { path: string, type: "dir"|"file" }|nil
+function M.entry_under_cursor()
+    local node = cursor_node()
+    if not node then
+        return nil
+    end
+    return { path = node.path, type = model.is_dir(node) and "dir" or "file" }
+end
+
 --- go_in: re-target into a directory line; open a file line (guarding pending edits).
 local function go_in()
     local node = cursor_node()
@@ -772,6 +786,16 @@ function M.open(dir)
         api.nvim_set_current_win(state.win)
         return
     end
+    -- Open latch: the surface is built only inside the async `model.load` callback below, but `M.is_open()`
+    -- reads `state.win`, which is not set until that callback runs. Two rapid opens (or `:LvimFiles edit`
+    -- twice during a slow scan of a huge directory) would both pass the guard and build TWO surfaces — the
+    -- first handle overwritten in `state.surface`, un-closeable. The latch holds the LATEST requested dir so
+    -- the in-flight open lands on it instead of spawning a second surface.
+    if state.opening then
+        state.opening = dir
+        return
+    end
+    state.opening = dir
     state.opener = api.nvim_get_current_win()
     state.base_dir = dir
     -- Seed the filters from config (same defaults as the tree panel; `.` / `H` toggle them live).
@@ -856,6 +880,7 @@ function M.open(dir)
                     model.release(vv.node)
                 end
                 state.views, state.yanks = {}, {}
+                state.opening = false
                 state.buf, state.win, state.st, state.surface, state.dir, state.base_dir = nil, nil, nil, nil, nil, nil
             end,
         }
@@ -879,8 +904,16 @@ function M.open(dir)
         })
         state.dir = dir
         setup_autocmds()
-        render_dir(dir)
-        git.refresh(dir)
+        -- Release the latch. If another open() arrived for a DIFFERENT directory while this scan was in
+        -- flight, honour it now (retarget the freshly built surface) instead of having spawned a second one.
+        local pending = state.opening
+        state.opening = false
+        if type(pending) == "string" and pending ~= dir then
+            retarget(pending)
+        else
+            render_dir(dir)
+        end
+        git.refresh(state.dir or dir)
     end)
 end
 

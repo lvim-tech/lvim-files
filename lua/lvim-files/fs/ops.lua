@@ -252,6 +252,13 @@ function M.copy(from, to)
     if from == to then
         return false, "source and target are the same"
     end
+    -- Refuse a copy whose TARGET sits inside the SOURCE subtree (e.g. `/a` → `/a/a`): the recursive walk
+    -- would scan `from`, find the freshly created `to` inside it, and copy that in turn — an unbounded
+    -- descent (`/a/a/a/…`) that spews nested directories on disk until the path length blows up. `rename`
+    -- is safe from this only because the OS rejects it; the copy engine must guard it itself.
+    if to:sub(1, #from + 1) == from .. "/" then
+        return false, "cannot copy " .. from .. " into itself"
+    end
     if M.exists(to) then
         return false, to .. " already exists"
     end
