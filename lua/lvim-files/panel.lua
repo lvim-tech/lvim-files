@@ -790,30 +790,6 @@ local function action_rename()
     })
 end
 
---- Delete the node under the cursor (trash-aware confirm wording).
-local function action_delete()
-    local node = cur_node()
-    if not node then
-        return
-    end
-    local verb = ops.uses_trash() and "Trash" or "Delete"
-    confirm({
-        title = verb .. " " .. node.name .. "?",
-        default_no = true,
-        callback = function(yes)
-            if not yes then
-                return
-            end
-            local dir = node.parent and node.parent.path or vim.fs.dirname(node.path)
-            local ok, err = ops.delete(node.path)
-            if not ok then
-                vim.notify("lvim-files: " .. (err or "delete failed"), vim.log.levels.ERROR)
-            end
-            refresh_dir(dir)
-        end,
-    })
-end
-
 --- The nodes a copy/cut acts on: the VISUAL selection when there is one (that is what a selection MEANS),
 --- else the single node under the cursor. Called from both the normal-mode key and the visual-mode one, so
 --- `c`/`x` do the obvious thing in either — no separate "mark" mode to learn.
@@ -841,6 +817,49 @@ local function nodes_for_action(visual)
         end
     end
     return out
+end
+
+--- Delete the acted-on nodes — the VISUAL selection when there is one, else the node under the cursor
+--- (trash-aware confirm wording). Deleting several at once is the point of having a selection; the confirm
+--- names the single file, or counts them, so a multi-delete cannot be waved through as if it were one.
+---@param visual boolean?  invoked from a visual-mode mapping
+local function action_delete(visual)
+    local nodes = nodes_for_action(visual == true)
+    if #nodes == 0 then
+        return
+    end
+    local verb = ops.uses_trash() and "Trash" or "Delete"
+    local what = (#nodes == 1) and nodes[1].name or (#nodes .. " entries")
+    confirm({
+        title = verb .. " " .. what .. "?",
+        default_no = true,
+        callback = function(yes)
+            if not yes then
+                return
+            end
+            -- Collect the parent directories first: deleting invalidates the nodes, and several entries can
+            -- share a parent (or span two), so each affected directory is refreshed exactly once at the end.
+            local dirs, seen, failed = {}, {}, 0
+            for _, node in ipairs(nodes) do
+                local dir = node.parent and node.parent.path or vim.fs.dirname(node.path)
+                if dir and not seen[dir] then
+                    seen[dir] = true
+                    dirs[#dirs + 1] = dir
+                end
+                local ok, err = ops.delete(node.path)
+                if not ok then
+                    failed = failed + 1
+                    vim.notify("lvim-files: " .. (err or ("could not delete " .. node.name)), vim.log.levels.ERROR)
+                end
+            end
+            if failed > 0 and #nodes > 1 then
+                vim.notify(("lvim-files: %d of %d could not be deleted"):format(failed, #nodes), vim.log.levels.WARN)
+            end
+            for _, dir in ipairs(dirs) do
+                refresh_dir(dir)
+            end
+        end,
+    })
 end
 
 --- Put the acted-on nodes on the clipboard (copy or cut).
@@ -1308,16 +1327,32 @@ local function set_keys(map)
     -- there to copy.
     if state.buf and api.nvim_buf_is_valid(state.buf) then
         local keys = cfg().keys or {}
-        for action, mode in pairs({ copy = "copy", copy_path = "copy", cut = "cut" }) do
+        -- action -> what the visual key does. `delete` joined copy/cut here because it has exactly the same
+        -- problem the comment above describes for `y`: with a selection up and no mapping, `d` fell through
+        -- to Vim's own operator and hit the panel's non-modifiable buffer (E21) instead of deleting the
+        -- selected entries.
+        local visual_actions = {
+            copy = function()
+                action_mark("copy", true)
+            end,
+            copy_path = function()
+                action_mark("copy", true)
+            end,
+            cut = function()
+                action_mark("cut", true)
+            end,
+            delete = function()
+                action_delete(true)
+            end,
+        }
+        for action, run in pairs(visual_actions) do
             for _, lhs in ipairs(type(keys[action]) == "table" and keys[action] or { keys[action] }) do
                 if type(lhs) == "string" and lhs ~= "" then
-                    vim.keymap.set("x", lhs, function()
-                        action_mark(mode, true)
-                    end, {
+                    vim.keymap.set("x", lhs, run, {
                         buffer = state.buf,
                         nowait = true,
                         silent = true,
-                        desc = "lvim-files: " .. mode .. " the selected entries",
+                        desc = "lvim-files: " .. action .. " the selected entries",
                     })
                 end
             end
