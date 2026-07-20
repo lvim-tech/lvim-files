@@ -432,9 +432,10 @@ end
 --- the option is off. Collapses DEEPEST-first so every folding node is still reachable through its
 --- (still-expanded) ancestors — the tree's `on_collapse` hook then releases each watcher reliably.
 ---@param keep_path string
+---@return boolean closed  whether anything was collapsed (rows moved, so the caller may need to refocus)
 local function collapse_others(keep_path)
     if not (cfg().auto_collapse and state.panel) then
-        return
+        return false
     end
     keep_path = model.normalize(keep_path)
     local close = {}
@@ -452,6 +453,7 @@ local function collapse_others(keep_path)
     for _, dpath in ipairs(close) do
         state.panel.collapse(dpath)
     end
+    return #close > 0
 end
 
 --- `open` on the current row: toggle a directory, open a file. (The tree's `on_expand` hook does
@@ -1613,7 +1615,20 @@ function M.open(enter, path)
         on_expand = function(ui)
             watch(ui.data)
             ensure_loaded(ui.data)
-            collapse_others(ui.data.path)
+            -- `auto_collapse` closes the branches this one is not part of — including branches ABOVE
+            -- it, whose rows then disappear and pull the whole tree up. The cursor is a LINE NUMBER,
+            -- so it stays where it was and now points at whatever slid into that line: the folder
+            -- just opened ends up somewhere below the cursor, which reads as the tree losing your
+            -- place. Re-focus the node itself, after the repaint `expand` performs once this hook
+            -- returns (hence the schedule — focusing here would be undone by that refresh).
+            if collapse_others(ui.data.path) then
+                local path = ui.data.path
+                vim.schedule(function()
+                    if state.panel then
+                        state.panel.focus(path)
+                    end
+                end)
+            end
         end,
         on_collapse = function(ui)
             unwatch(ui.data)
