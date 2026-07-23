@@ -48,6 +48,11 @@ local state = {
     diag_timer = nil, ---@type uv.uv_timer_t|nil
     opener = nil, ---@type integer|nil       the last real editor window (files open there)
     followed = nil, ---@type string|nil      the last path revealed by follow-current-file (dedup guard)
+    -- Session persistence across close/reopen: the fold overrides and the cursor's SCREEN offset (rows below
+    -- the topline), saved on close and restored on the next open so the tree comes back exactly as it was.
+    saved_expanded = nil, ---@type table<string, boolean>|nil
+    saved_offset = nil, ---@type integer|nil
+    suppress_render = false, ---@type boolean  hold repaints while preloading a restored fold state
 }
 
 --- The live panel config.
@@ -113,8 +118,12 @@ local function unwatch(node)
 end
 
 --- Coalesced repaint — delegates to the shared tree's queue (bursts of async loads / git
---- refreshes collapse into one repaint on the next tick).
+--- refreshes collapse into one repaint on the next tick). Held off while a restore is PRELOADING the
+--- saved fold state so the tree paints ONCE, fully populated, instead of rearranging as each dir lands.
 local function schedule_render()
+    if state.suppress_render then
+        return
+    end
     if state.panel then
         state.panel.refresh()
     end
@@ -284,6 +293,9 @@ end
 
 --- Repaint NOW (synchronous — before a focus/reveal that needs the fresh rows).
 local function do_render()
+    if state.suppress_render then
+        return
+    end
     if state.panel and M.is_open() and state.root then
         ensure_loaded(state.root)
         state.panel.render()
@@ -1107,7 +1119,9 @@ end
 
 --- Expand every ancestor of `path`, then land the cursor on its row.
 ---@param path string
-local function reveal(path)
+---@param offset? integer  when set, scroll so the revealed row sits this many rows below the top — used on
+---                        OPEN to restore the exact scroll position the tree had when it was last closed
+local function reveal(path, offset)
     path = model.normalize(path)
     local root = state.root
     if not root then
@@ -1130,7 +1144,22 @@ local function reveal(path)
         if i > #comps then
             collapse_others(path) -- keep only the revealed file's branch open (auto_collapse)
             do_render()
+            -- MARK the file as the follow target so the tree re-seats the cursor onto it after every
+            -- background repaint (a diagnostics / git / fs-event render can no longer clamp the selection off
+            -- the open file). Then FOCUS it to position the cursor NOW — focus() moves unconditionally, so it
+            -- works both while following from the editor AND on a focused open (the seed, where the panel is
+            -- the current window and the mark's own not-current move would be a no-op).
+            state.panel.mark(path)
             state.panel.focus(path)
+            -- Restore the saved scroll: place the revealed row `offset` rows below the top (its screen
+            -- position at the last close). clamp_view still trims any blank-below afterwards, so a row near
+            -- the end lands as high as the content allows — exactly as it did before.
+            if offset and state.win and is_valid_win(state.win) then
+                api.nvim_win_call(state.win, function()
+                    local lnum = vim.fn.line(".")
+                    vim.fn.winrestview({ topline = math.max(1, lnum - offset), lnum = lnum })
+                end)
+            end
             return
         end
         model.load(node, function()
@@ -1152,6 +1181,63 @@ local function reveal(path)
         end)
     end
     step(root, 1)
+end
+
+--- Preload every directory in `state.saved_expanded` (a restored fold state) so the model holds their
+--- listings BEFORE the first paint — the caller suppresses repaints meanwhile, so the tree appears once,
+--- fully populated, instead of visibly expanding dir-by-dir as async scans land. Each saved path is walked
+--- from the root (loading every component); `done` fires once ALL walks complete.
+---@param done fun()
+local function preload_expanded(done)
+    local root = state.root
+    local exp = state.saved_expanded or {}
+    local paths = {}
+    for p, on in pairs(exp) do
+        if on and root and p ~= root.path then
+            paths[#paths + 1] = p
+        end
+    end
+    if not root or #paths == 0 then
+        done()
+        return
+    end
+    local prefix = root.path == "/" and "/" or (root.path .. "/")
+    local pending = #paths
+    local function one_done()
+        pending = pending - 1
+        if pending <= 0 then
+            done()
+        end
+    end
+    for _, target in ipairs(paths) do
+        local comps = {}
+        for comp in target:sub(#prefix + 1):gmatch("[^/]+") do
+            comps[#comps + 1] = comp
+        end
+        ---@param node LvimFilesNode
+        ---@param i integer
+        local function step(node, i)
+            if i > #comps then
+                one_done()
+                return
+            end
+            model.load(node, function()
+                local child
+                for _, ch in ipairs(node.children or {}) do
+                    if ch.name == comps[i] then
+                        child = ch
+                        break
+                    end
+                end
+                if child and model.is_dir(child) then
+                    step(child, i + 1)
+                else
+                    one_done() -- a saved path that no longer exists: stop this walk
+                end
+            end)
+        end
+        step(root, 1)
+    end
 end
 
 --- Fuzzy-jump within the loaded tree (delegates to lvim-picker over the loaded entries).
@@ -1421,10 +1507,36 @@ local function setup_autocmds()
             end
             name = model.normalize(name)
             if name == state.followed then
+                -- Same file as last time, so the tree is already EXPANDED to it — skip the costly reveal
+                -- (walk + re-render). But the panel cursor may have DRIFTED off the file while we were away
+                -- from this buffer (clicking a folder in the tree, or opening this very file FROM it): re-mark
+                -- it so the tree re-seats the cursor onto it. mark() never steals focus, and is a no-op when
+                -- the row is not visible.
+                if state.panel then
+                    state.panel.mark(name, { move_cursor = true })
+                end
                 return
             end
             state.followed = name
             reveal(name)
+        end,
+    })
+    -- External-change fallback. The per-directory fs_event watchers are best-effort: libuv drops events
+    -- under load, and an atomic save / git operation that swaps a directory via rename can leave inotify
+    -- watching a stale inode — so files added or deleted OUTSIDE the tree's own actions are not always
+    -- caught. Reconcile the tree with the real filesystem (the same rescan as the manual refresh) on the
+    -- events that bracket such changes:
+    --   * FocusGained  — another application (a separate terminal, another editor, a `git checkout`);
+    --   * TermLeave / TermClose — Neovim's OWN :terminal (creating/removing a file there never blurs
+    --     Neovim, so FocusGained alone misses it — the reported case);
+    --   * ShellCmdPost — a `:!cmd` shell-out (`:!touch` / `:!rm`).
+    -- action_refresh is async + coalesced and these events are all infrequent, so the rescan is cheap.
+    api.nvim_create_autocmd({ "FocusGained", "TermLeave", "TermClose", "ShellCmdPost" }, {
+        group = state.augroup,
+        callback = function()
+            if M.is_open() and state.root then
+                action_refresh()
+            end
         end,
     })
     -- Debounced diagnostics repaint (DiagnosticChanged fires in bursts while typing).
@@ -1568,6 +1680,7 @@ function M.open(enter, path)
     -- (the lazy `to_nodes` factory) and binds the file actions on top.
     state.panel = lvim_ui.tree({
         default_expanded = false, -- directories start collapsed; the expand set is the user's
+        expanded = state.saved_expanded, -- restore the fold state from the previous close (nil on first open)
         connectors = false, -- plain rows (no ├/└) — the file-tree look
         elide_guides = false, -- a solid │ per ancestor level
         -- Content padding + scrollbar come from the LIVE config; the tree reserves one more right column for the
@@ -1725,13 +1838,34 @@ function M.open(enter, path)
             schedule_render()
         end
     end)
+    -- Restoring a saved fold state: hold repaints from HERE (before set_root's own render) so the tree
+    -- never flashes empty, then paints once fully populated after the preload below.
+    local restoring = state.saved_expanded ~= nil and next(state.saved_expanded) ~= nil
+    if restoring then
+        state.suppress_render = true
+    end
     set_root(path or vim.fn.getcwd())
     -- Land on the file the tree was opened FROM (once the root scan is up), so opening the tree reveals
-    -- where you are — the on-open counterpart to `follow`.
-    if seed_file and cfg().follow ~= false then
+    -- where you are — the on-open counterpart to `follow`. When restoring a fold state, the reveal waits
+    -- for the preload; otherwise it is just scheduled after the root scan.
+    local offset = state.saved_offset -- restore the previous scroll position, if any
+    local follow = seed_file and cfg().follow ~= false
+    if follow then
         state.followed = seed_file
+    end
+    if restoring then
+        -- Preload every saved-open dir with repaints held off, so the tree paints ONCE fully populated
+        -- (no dir-by-dir rearranging), then render + reveal + restore the scroll.
+        preload_expanded(function()
+            state.suppress_render = false
+            do_render()
+            if follow then
+                reveal(seed_file, offset)
+            end
+        end)
+    elseif follow then
         vim.schedule(function()
-            reveal(seed_file)
+            reveal(seed_file, offset)
         end)
     end
 end
@@ -1740,6 +1874,14 @@ end
 function M.close()
     if not state.surface then
         return
+    end
+    -- Snapshot the tree's state so the NEXT open restores it exactly: the fold overrides, and the cursor's
+    -- SCREEN offset (its row minus the topline) so the same content sits at the same place — a screen offset
+    -- survives the async reload where an absolute line number would not.
+    if state.panel and is_valid_win(state.win) then
+        state.saved_expanded = vim.deepcopy(state.panel.expanded_state())
+        local v = api.nvim_win_call(state.win, vim.fn.winsaveview)
+        state.saved_offset = math.max(0, (v.lnum or 1) - (v.topline or 1))
     end
     local f = state.surface
     state.surface = nil
