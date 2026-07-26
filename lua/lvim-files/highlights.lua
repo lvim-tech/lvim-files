@@ -91,6 +91,12 @@ function M.build()
         LvimFilesFilterKey = { fg = c.blue, bg = mtint(c.blue, 0.3), bold = true },
         LvimFilesFilterOn = { fg = c.green, bold = true },
         LvimFilesFilterOff = { fg = hl.blend(c.green, c.bg, 0.6) },
+        -- …and their HOVER state (the keyboard footer-nav selection lands here): a blue-tinted background
+        -- fills the whole chip so the selected filter reads as focused, while the on/off fg still shows its
+        -- state. Without these the box's `hover` == `normal` and a selected filter looked unselected.
+        LvimFilesFilterKeyHover = { fg = c.blue, bg = mtint(c.blue, 0.5), bold = true },
+        LvimFilesFilterOnHover = { fg = c.green, bg = mtint(c.blue, 0.3), bold = true },
+        LvimFilesFilterOffHover = { fg = hl.blend(c.green, c.bg, 0.6), bg = mtint(c.blue, 0.3) },
     }
     info_groups(groups)
     return groups

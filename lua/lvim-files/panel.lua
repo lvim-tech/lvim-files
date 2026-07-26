@@ -170,15 +170,15 @@ local function filter_button(label, key, active, count, run)
             padding = { 1, 1 },
             normal = "LvimFilesFilterKey",
             active = "LvimFilesFilterKey",
-            hover = "LvimFilesFilterKey",
-            hover_active = "LvimFilesFilterKey",
+            hover = "LvimFilesFilterKeyHover",
+            hover_active = "LvimFilesFilterKeyHover",
         },
         text = {
             padding = { 1, 1 },
             normal = "LvimFilesFilterOff",
             active = "LvimFilesFilterOn",
-            hover = "LvimFilesFilterOff",
-            hover_active = "LvimFilesFilterOn",
+            hover = "LvimFilesFilterOffHover",
+            hover_active = "LvimFilesFilterOnHover",
         },
     }
     return surface.button(
@@ -1822,6 +1822,9 @@ function M.open(enter, path)
         -- bottom); the tree's `on_render` refreshes it live via state.surface.set_footer with the
         -- real counts.
         footer = { bars = { { items = filter_items({ dot = 0, ign = 0 }), align = "center" } } },
+        -- `<C-j>` steps from the tree DOWN into the footer filter bar, `<C-l>`/`<C-h>` move between the
+        -- toggles, `<CR>` flips one, `<C-k>`/`q` step back up — the keyboard path to the footer chips.
+        footer_nav = true,
         close_keys = {},
     })
     if not state.diag_timer then
