@@ -686,13 +686,15 @@ local function action_info()
     row("Accessed", when(st.atime and st.atime.sec), "time")
     row("Changed", when(st.ctime and st.ctime.sec), "time")
     -- What the tree already knows about it, so the popup answers the same question the row's badge hints at.
+    -- ONE Git row: `status()` already answers "ignored" for an ignored path, so asking `is_ignored`
+    -- for a row of its own printed the same label and the same value twice. The one case the two
+    -- calls disagree about is a TRACKED file under an ignored directory — it keeps its own status,
+    -- and the cover is said in that same row instead of a second one.
     local gs = git.status(node.path)
     if gs and gs ~= "" then
         lines[#lines + 1] = ""
-        row("Git", tostring(gs), "git")
-    end
-    if git.is_ignored(node.path) then
-        row("Git", "ignored", "git")
+        local covered = gs ~= "ignored" and git.is_ignored(node.path)
+        row("Git", covered and (gs .. "  (under an ignored path)") or tostring(gs), "git")
     end
     lines[#lines + 1] = ""
 
