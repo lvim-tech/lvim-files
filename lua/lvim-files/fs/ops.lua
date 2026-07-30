@@ -276,17 +276,26 @@ end
 
 --- Delete `path` — to the trash (`gio trash`) when enabled + available, else from disk
 --- (recursive). Unmodified buffers on the deleted path are wiped.
+---
+--- A trash failure is reported SEPARATELY (4th return) rather than folded into `err`, because it is
+--- the one failure with an obvious next step. The trash is per-VOLUME: freedesktop puts it in
+--- `<mount>/.Trash-$uid`, so a file on an external disk cannot be trashed when that directory is
+--- missing and cannot be created (read-only mount, no permission, a filesystem without the support)
+--- — `gio` then reports "Unable to find or create trash directory". Deleting such a file from the
+--- panel simply failed with no way forward; the caller can now offer to remove it from disk instead,
+--- which stays an explicit choice rather than a silent fallback to something irreversible.
 ---@param path string
----@return boolean ok, string? err, string? method  method = "trash" | "delete"
-function M.delete(path)
+---@param opts? { permanent?: boolean }  skip the trash and remove from disk
+---@return boolean ok, string? err, string? method, boolean? trash_failed  method = "trash" | "delete"
+function M.delete(path, opts)
     if not M.exists(path) then
         return false, path .. " does not exist"
     end
     local method
-    if M.uses_trash() then
+    if M.uses_trash() and not (opts and opts.permanent) then
         local res = vim.system({ "gio", "trash", path }, { text = true }):wait()
         if res.code ~= 0 then
-            return false, ((res.stderr or "gio trash failed"):gsub("%s+$", ""))
+            return false, ((res.stderr or "gio trash failed"):gsub("%s+$", "")), nil, true
         end
         method = "trash"
     else

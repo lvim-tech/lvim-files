@@ -856,16 +856,24 @@ local function action_delete(visual)
             -- Collect the parent directories first: deleting invalidates the nodes, and several entries can
             -- share a parent (or span two), so each affected directory is refreshed exactly once at the end.
             local dirs, seen, failed = {}, {}, 0
+            -- Entries the TRASH refused (a volume with no usable `.Trash-$uid`). They are not errors to
+            -- report and forget: removing them from disk is the only remaining way, so they are gathered
+            -- and offered as one explicit second choice instead of N dead-end messages.
+            local untrashable = {}
             for _, node in ipairs(nodes) do
                 local dir = node.parent and node.parent.path or vim.fs.dirname(node.path)
                 if dir and not seen[dir] then
                     seen[dir] = true
                     dirs[#dirs + 1] = dir
                 end
-                local ok, err = ops.delete(node.path)
+                local ok, err, _, trash_failed = ops.delete(node.path)
                 if not ok then
-                    failed = failed + 1
-                    vim.notify("lvim-files: " .. (err or ("could not delete " .. node.name)), vim.log.levels.ERROR)
+                    if trash_failed then
+                        untrashable[#untrashable + 1] = node
+                    else
+                        failed = failed + 1
+                        vim.notify("lvim-files: " .. (err or ("could not delete " .. node.name)), vim.log.levels.ERROR)
+                    end
                 end
             end
             if failed > 0 and #nodes > 1 then
@@ -873,6 +881,30 @@ local function action_delete(visual)
             end
             for _, dir in ipairs(dirs) do
                 refresh_dir(dir)
+            end
+            if #untrashable > 0 then
+                local label = (#untrashable == 1) and untrashable[1].name or (#untrashable .. " entries")
+                confirm({
+                    title = "No trash on this volume. Delete " .. label .. " permanently?",
+                    default_no = true,
+                    callback = function(sure)
+                        if not sure then
+                            return
+                        end
+                        for _, node in ipairs(untrashable) do
+                            local ok, err = ops.delete(node.path, { permanent = true })
+                            if not ok then
+                                vim.notify(
+                                    "lvim-files: " .. (err or ("could not delete " .. node.name)),
+                                    vim.log.levels.ERROR
+                                )
+                            end
+                        end
+                        for _, dir in ipairs(dirs) do
+                            refresh_dir(dir)
+                        end
+                    end,
+                })
             end
         end,
     })
