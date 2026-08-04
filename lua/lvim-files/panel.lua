@@ -251,14 +251,14 @@ local function to_nodes(node)
             -- badges by its own right padding (and the scrollbar column), so a trailing blank here would just
             -- add a third gap before the bar.
             local badges = {}
-            ---@param glyph string
+            ---@param mark string
             ---@param hl string|nil
-            local function badge(glyph, hl)
+            local function badge(mark, hl)
                 local g = hl or "LvimFilesEmpty"
                 if #badges > 0 then
                     badges[#badges + 1] = { " ", g }
                 end
-                badges[#badges + 1] = { glyph, g }
+                badges[#badges + 1] = { mark, g }
             end
             if ch.type == "link" then
                 badge(icons.symlink, "LvimFilesSymlink")
@@ -1513,7 +1513,7 @@ local function setup_autocmds()
                     -- buffer exists, and that error escapes the scheduled WinClosed callback (leaving the
                     -- tree half-closed). `confirm quit` turns it into an interactive save prompt instead; the
                     -- pcall keeps any other quit refusal (E37/…) from bubbling out of the autocmd.
-                    pcall(vim.cmd, "confirm quit")
+                    pcall(vim.cmd.quit, { mods = { confirm = true } })
                 end
             end)
         end,
@@ -1769,10 +1769,10 @@ function M.open(enter, path)
             -- place. Re-focus the node itself, after the repaint `expand` performs once this hook
             -- returns (hence the schedule — focusing here would be undone by that refresh).
             if collapse_others(ui.data.path) then
-                local path = ui.data.path
+                local focus_path = ui.data.path
                 vim.schedule(function()
                     if state.panel then
-                        state.panel.focus(path)
+                        state.panel.focus(focus_path)
                     end
                 end)
             end

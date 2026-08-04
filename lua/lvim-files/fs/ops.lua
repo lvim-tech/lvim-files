@@ -96,7 +96,7 @@ local function retarget_buffers(from, to)
                 pcall(api.nvim_buf_set_name, buf, new)
                 if not vim.bo[buf].modified then
                     api.nvim_buf_call(buf, function()
-                        pcall(vim.cmd, "silent! edit!")
+                        pcall(vim.cmd.edit, { bang = true, mods = { silent = true, emsg_silent = true } })
                     end)
                 end
             end
