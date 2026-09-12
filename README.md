@@ -107,6 +107,7 @@ require("lvim-files").setup({
             find = "/", -- fuzzy jump in the tree (lvim-picker)
             toggle_dotfiles = ".", -- toggle the dotfiles filter
             toggle_gitignore = "H", -- toggle the git-ignored filter
+            toggle_width = "w", -- widen the panel to its widest row; again: back to `width`
             refresh = "R", -- rescan the tree + git status
             edit_mode = "e", -- open the EDIT view on the directory
             help = "g?", -- the keymap cheatsheet (the set-wide chord)

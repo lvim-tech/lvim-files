@@ -23,6 +23,7 @@
 ---@field find string|string[]          fuzzy-jump to a loaded entry (lvim-picker)
 ---@field toggle_dotfiles string|string[]   toggle the dotfiles filter
 ---@field toggle_gitignore string|string[]  toggle the gitignore filter
+---@field toggle_width string|string[]  widen the panel to its widest row / back to the configured width
 ---@field refresh string|string[]       rescan the tree (and git status)
 ---@field edit_mode string|string[]     open the EDIT view on the directory under the cursor
 ---@field info string|string[]          show everything known about the entry (a read-only popup)
@@ -158,6 +159,7 @@ local M = {
             find = "/",
             toggle_dotfiles = ".",
             toggle_gitignore = "H",
+            toggle_width = "w", -- widen to the widest row; again: back to `width`
             refresh = "R",
             edit_mode = "e",
             info = "i", -- everything known about the entry under the cursor (a read-only popup)

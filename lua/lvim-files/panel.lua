@@ -53,6 +53,7 @@ local state = {
     saved_expanded = nil, ---@type table<string, boolean>|nil
     saved_offset = nil, ---@type integer|nil
     suppress_render = false, ---@type boolean  hold repaints while preloading a restored fold state
+    fitted = false, ---@type boolean         the panel is widened to its widest row (`toggle_width`)
 }
 
 --- The live panel config.
@@ -1329,6 +1330,41 @@ local function action_edit_mode()
     require("lvim-files.edit").open(target_dir())
 end
 
+-- Fitted, the panel may take at most this share of the screen — the editor keeps the rest. Rows wider than
+-- that still clip; a file tree that swallows the editor to show one long name is not a fit.
+local FIT_MAX = 2 / 3
+
+--- The configured panel width in columns: `width` is a count (>1) or a screen fraction (≤1), floored at 20.
+---@return integer
+local function configured_width()
+    local width = cfg().width or 34
+    local px = (width <= 1) and math.floor(vim.o.columns * width) or math.floor(width)
+    return math.max(20, px)
+end
+
+--- Widen the panel to its widest row, or — when it is already widened — back to the configured width. The
+--- measure is the tree's own (`content_width`: guides, icons, badges, padding, the scrollbar column), so the
+--- fit matches what the tree draws. It is a snapshot: a directory expanded afterwards may clip again, and a
+--- second press brings the panel back. The surface re-renders the tree on the resulting WinResized.
+local function action_toggle_width()
+    if not (state.panel and is_valid_win(state.win)) then
+        return
+    end
+    if state.fitted then
+        state.fitted = false
+        api.nvim_win_set_width(state.win, configured_width())
+        return
+    end
+    local cap = math.max(configured_width(), math.floor(vim.o.columns * FIT_MAX))
+    local target = math.min(state.panel.content_width(), cap)
+    if target <= api.nvim_win_get_width(state.win) then
+        vim.notify("lvim-files: every row already fits.", vim.log.levels.INFO)
+        return
+    end
+    state.fitted = true
+    api.nvim_win_set_width(state.win, target)
+end
+
 -- ── help window (the canonical cheatsheet) ────────────────────────────────────
 
 -- Action name → label, in display order.
@@ -1352,6 +1388,7 @@ local HELP = {
     { "find", "fuzzy jump in the tree" },
     { "toggle_dotfiles", "toggle dotfiles" },
     { "toggle_gitignore", "toggle git-ignored" },
+    { "toggle_width", "fit width to the widest row / back" },
     { "refresh", "rescan tree + git" },
     { "edit_mode", "edit view on directory" },
     { "help", "this help" },
@@ -1424,6 +1461,7 @@ local function set_keys(map)
         find = action_find,
         toggle_dotfiles = toggle_dotfiles,
         toggle_gitignore = toggle_gitignore,
+        toggle_width = action_toggle_width,
         refresh = action_refresh,
         edit_mode = action_edit_mode,
         info = action_info,
@@ -1741,9 +1779,7 @@ function M.open(enter, path)
         double_click = config.panel.mouse_open == "double", -- a single click then only selects; double click opens/expands
 
         size = function()
-            local width = pc.width or 34
-            local px = (width <= 1) and math.floor(vim.o.columns * width) or math.floor(width)
-            return math.max(20, px), 1
+            return configured_width(), 1
         end,
         -- The lazy top level: re-run per render so every repaint re-decorates live (git/diag badges).
         root = function()
@@ -1839,6 +1875,7 @@ function M.open(enter, path)
                 git.reset()
             end
             state.win, state.buf, state.root, state.panel, state.surface = nil, nil, nil, nil, nil
+            state.fitted = false -- a reopened panel comes back at its configured width
         end,
     })
 

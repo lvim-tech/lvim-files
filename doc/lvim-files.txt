@@ -62,6 +62,7 @@ Defaults shown; `setup()` merges overrides into the live config.
               find = "/",
               toggle_dotfiles = ".",
               toggle_gitignore = "H",
+              toggle_width = "w",    -- fit to the widest row / back
               refresh = "R",
               edit_mode = "e",
               help = "?",
@@ -129,6 +130,7 @@ Default keys (see `panel.keys`):
   - / ~       re-root one directory up / at the cwd
   /           fuzzy jump to a loaded entry (lvim-picker)
   . / H       toggle the dotfiles / git-ignored filters
+  w           widen the panel to its widest row; again: back to `width`
   R           rescan every loaded directory + git status
   e           open the EDIT view on the directory under the cursor
   g?          the keymap cheatsheet
