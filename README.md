@@ -31,7 +31,7 @@ pipeline:
 
 ## Installation
 
-Requires Neovim >= 0.11, [lvim-utils](https://github.com/lvim-tech/lvim-utils)
+Requires Neovim >= 0.12, [lvim-utils](https://github.com/lvim-tech/lvim-utils)
 and [lvim-ui](https://github.com/lvim-tech/lvim-ui). Optional integrations:
 [lvim-icons](https://github.com/lvim-tech/lvim-icons) (entry icons),
 [lvim-winpick](https://github.com/lvim-tech/lvim-winpick) (open in a picked
