@@ -739,7 +739,7 @@ build_footer = function(counts)
                         counts.dot,
                         toggle_dotfiles
                     ),
-                    { type = "separator", text = "●", style = { padding = { 1, 1 }, hl = "LvimUiPeekFilterSep" } },
+                    { type = "separator", text = "\u{f09de}", style = { padding = { 1, 1 }, hl = "LvimUiPeekFilterSep" } },
                     filter_button(
                         "Git",
                         key_label(ek.toggle_gitignore),
