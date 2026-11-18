@@ -86,9 +86,8 @@
 ---@field hint string
 
 ---@class LvimFilesIcons
----@field fold_open string              expanded-directory marker
----@field fold_closed string            collapsed-directory marker
----@field guide string                  indent guide column
+---@field guide string                  indent guide column (under a 1-cell folder icon)
+---@field guide_wide string             indent guide under a 2-cell folder icon (an image or a wide glyph)
 ---@field dir string                    fallback directory icon (lvim-icons wins when present)
 ---@field dir_open string               fallback open-directory icon
 ---@field file string                   fallback file icon
@@ -191,9 +190,10 @@ local M = {
     hijack_netrw = false,
     lsp_rename = true,
     icons = {
-        fold_open = "", -- nf-fa-caret_down
-        fold_closed = "", -- nf-fa-caret_right
+        -- the guide runs under the folder ICON (the tree's `guide_under_icon`): this line under a 1-cell glyph,
+        -- `guide_wide` under a 2-cell icon (an image or a wide glyph), whose centre is the boundary of its cells
         guide = "│",
+        guide_wide = "▕", -- ▕ right-edge line
         dir = "", -- nf-fa-folder
         dir_open = "", -- nf-fa-folder_open
         file = "", -- nf-fa-file

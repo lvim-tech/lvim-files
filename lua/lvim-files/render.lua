@@ -17,8 +17,10 @@ local M = {}
 --- icon provider's KIND table; files by name. A provider that returns no group falls back
 --- to the plugin's own name groups so the row is never unthemed.
 ---@param node LvimFilesNode
+--- The third value is the provider's full result (nil for the plugin's own fallback glyphs) — a tree row can
+--- hand it to lvim-ui so the icon's own `placement` applies (a "virtual" icon is not text of the line).
 ---@param expanded? boolean
----@return string glyph, string hl
+---@return string glyph, string hl, LvimUtilsIconResult? res
 function M.node_icon(node, expanded)
     local icons = config.icons
     local res
@@ -28,21 +30,28 @@ function M.node_icon(node, expanded)
         -- own (often light-blue) folder hue.
         local dir_hl = node.name:sub(1, 1) == "." and "LvimFilesDirHidden" or "LvimFilesDir"
         res = iconlib.get(node.name, { kind = expanded and "directory_open" or "directory" })
-        local glyph = (res and res.glyph ~= "") and res.glyph or (expanded and icons.dir_open or icons.dir)
-        return glyph, dir_hl
+        -- An image icon (lvim-icons svg mode) keeps its own group: its foreground IS the image id, so the
+        -- directory colour would point the terminal at another image and the folder icon would vanish.
+        if res and res.image then
+            return res.glyph, res.hl, res
+        end
+        if not res or res.glyph == "" then
+            return expanded and icons.dir_open or icons.dir, dir_hl
+        end
+        return res.glyph, dir_hl, res
     elseif node.type == "link" then
         local kind = node.broken_link and "symlink_broken" or (node.link_dir and "symlink_dir" or "symlink")
         res = iconlib.get(node.name, { kind = kind })
         if not res or res.glyph == "" then
             return icons.symlink, "LvimFilesSymlink"
         end
-        return res.glyph, (res.hl ~= "" and res.hl) or "LvimFilesSymlink"
+        return res.glyph, (res.hl ~= "" and res.hl) or "LvimFilesSymlink", res
     end
     res = iconlib.get(node.name)
     if not res or res.glyph == "" then
         return icons.file, "LvimFilesFile"
     end
-    return res.glyph, (res.hl ~= "" and res.hl) or "LvimFilesFile"
+    return res.glyph, (res.hl ~= "" and res.hl) or "LvimFilesFile", res
 end
 
 --- The highlight group for a node's NAME text.

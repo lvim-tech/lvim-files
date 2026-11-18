@@ -61,7 +61,7 @@ function M.build()
         -- The `i` info popup — built from `config.colors.info` (accents + one tint), never from literals:
         -- see `info_groups()` above. Each row is one accent: the value wears it as TEXT, its key box as a
         -- WASH of the same colour.
-        -- tree chrome — the root header + fold carets track the directory green
+        -- tree chrome — the root header tracks the directory green
         LvimFilesRoot = { fg = c.green, bg = mtint(c.green, 0.2), bold = true },
         LvimFilesGuide = { fg = hl.blend(c.fg_dark, c.bg, 0.6) },
         LvimFilesFold = { fg = c.green },

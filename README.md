@@ -136,9 +136,8 @@ require("lvim-files").setup({
     hijack_netrw = false, -- open directory buffers in the EDIT view
     lsp_rename = true, -- workspace/willRenameFiles before rename/move
     icons = {
-        fold_open = vim.fn.nr2char(0xF0D7, 1), --   expanded directory
-        fold_closed = vim.fn.nr2char(0xF0DA, 1), --   collapsed directory
-        guide = "│", -- indent guide column
+        guide = "│", -- indent guide, under a 1-cell folder icon
+        guide_wide = "▕", -- indent guide under a 2-cell folder icon (right edge: the icon's centre)
         dir = vim.fn.nr2char(0xF07B, 1), --   fallback directory icon
         dir_open = vim.fn.nr2char(0xF07C, 1), --   fallback open directory
         file = vim.fn.nr2char(0xF15B, 1), --   fallback file icon

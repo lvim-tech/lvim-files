@@ -245,7 +245,7 @@ local function to_nodes(node)
         if visible(ch) then
             local is_dir = model.is_dir(ch)
             local expanded = is_dir and state.panel ~= nil and state.panel.expanded(ch.path)
-            local glyph, icon_hl = render.node_icon(ch, expanded)
+            local glyph, icon_hl, icon_res = render.node_icon(ch, expanded)
 
             -- Right-aligned badges: symlink marker + git status + worst contained diagnostic. The blank BETWEEN
             -- badges is a separator; there is deliberately NO trailing one — `lvim-ui.tree` insets right-aligned
@@ -276,7 +276,9 @@ local function to_nodes(node)
             out[#out + 1] = {
                 id = ch.path,
                 label = ch.name,
-                icon = glyph,
+                -- the provider's result when there is one: lvim-ui then honours its `placement` (a virtual
+                -- icon is not text of the row); `icon_hl` still colours a font glyph (the folder green)
+                icon = icon_res or glyph,
                 icon_hl = icon_hl,
                 label_hl = cut[ch.path] and "LvimFilesCut" or render.name_hl(ch),
                 expandable = is_dir,
@@ -1426,8 +1428,8 @@ end
 
 --- Bind the panel's config keymaps (the tree's `on_keys` hook — bound AFTER the tree's canonical
 --- `l`/`<CR>`/`h`, so a config key on the same lhs overrides the default). Mouse is the shared tree
---- canon: a click selects + activates the row (open the file / toggle the directory), a click on the
---- fold chevron / a double-click toggles the fold.
+--- canon: a click selects + activates the row (open the file / toggle the directory), a double-click
+--- toggles the fold. (There are no fold chevrons: a folder's icon shows whether it is open.)
 ---@param map fun(lhs: string|string[], fn: fun())
 local function set_keys(map)
     local actions = {
@@ -1755,14 +1757,16 @@ function M.open(enter, path)
         expanded = state.saved_expanded, -- restore the fold state from the previous close (nil on first open)
         connectors = false, -- plain rows (no ├/└) — the file-tree look
         elide_guides = false, -- a solid │ per ancestor level
+        -- no fold chevrons: a folder's icon shows whether it is open (Material / Nerd open-folder icons)
+        fold_markers = false,
+        guide_under_icon = true, -- the guide runs down from the folder's ICON
         -- Content padding + scrollbar come from the LIVE config; the tree reserves one more right column for the
         -- thumb whenever the bar is actually shown, so the bar never eats into the padding.
         padding = pc.padding,
         scrollbar = pc.scrollbar == true,
         icons = {
-            fold_open = config.icons.fold_open,
-            fold_closed = config.icons.fold_closed,
             guide = config.icons.guide,
+            guide_wide = config.icons.guide_wide,
         },
         hl = {
             guide = "LvimFilesGuide",
@@ -1793,7 +1797,7 @@ function M.open(enter, path)
                 open_file(ui.data)
             end
         end,
-        -- Every expansion path (key, mouse chevron, reveal) funnels here: watch the directory, kick its
+        -- Every expansion path (key, mouse, reveal) funnels here: watch the directory, kick its
         -- scan, and — with `auto_collapse` — keep only this branch open.
         on_expand = function(ui)
             watch(ui.data)
