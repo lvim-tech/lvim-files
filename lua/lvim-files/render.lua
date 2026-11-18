@@ -162,16 +162,18 @@ function M.diagnostics(root_path)
     return map
 end
 
---- The `icon name` text of an entry line in the EDIT view, plus its highlight spans
---- (byte-based, ready for extmarks).
+--- The text of an entry line in the EDIT view — the NAME only — plus its decoration spans (byte-based, ready
+--- for extmarks). The icon is not text: it is the span with a 4th field (its glyph or image cells), drawn as
+--- inline virtual text at column 0, so the cursor skips it, it cannot be edited or yanked, and a rename
+--- reads exactly what was typed (an image icon is many codepoints — as text it leaked into the name).
 ---@param node LvimFilesNode
----@return string line, { [1]: integer, [2]: integer, [3]: string }[] spans
+---@return string line, { [1]: integer, [2]: integer, [3]: string, [4]: string? }[] spans
 function M.edit_line(node)
     local glyph, icon_hl = M.node_icon(node, false)
-    local line = glyph .. " " .. node.name
+    local line = node.name
     local spans = {
-        { 0, #glyph, icon_hl },
-        { #glyph + 1, #line, M.name_hl(node) },
+        { 0, 0, icon_hl, glyph },
+        { 0, #line, M.name_hl(node) },
     }
     return line, spans
 end

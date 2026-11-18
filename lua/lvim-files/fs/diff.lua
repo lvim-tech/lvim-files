@@ -58,15 +58,27 @@ function M.parse_line(line)
         return nil, false, raw
     end
     local name = raw
-    local lead = name:byte(1)
-    if lead and lead >= 0xC2 then
-        local ch = name:match("^[\194-\244][\128-\191]*")
-        if ch then
-            local rest = name:sub(#ch + 1)
-            local stripped = rest:match("^%s+(.*)$")
-            if stripped and stripped ~= "" then
-                name = stripped
-            end
+    -- The edit view draws the icon as virtual text, so a line is just the name. A line can still START with
+    -- an icon (one pasted from elsewhere, an older view): drop a leading run of Nerd glyphs (private use) or
+    -- image cells (U+10EEEE with their diacritics) before a blank — and nothing else, so a name that starts
+    -- with an ordinary letter (`ä b.txt`) is kept whole.
+    local i, n = 1, #name
+    while i <= n do
+        local b = name:byte(i)
+        if (b == 0xEE or b == 0xEF) and i + 2 <= n then -- U+E000–U+FFFF: the BMP private use (Nerd glyphs)
+            i = i + 3
+        elseif (b == 0xF3 or b == 0xF4) and i + 3 <= n then -- planes 15/16: Nerd md glyphs, image cells
+            i = i + 4
+        elseif (b == 0xCC or b == 0xCD) and i + 1 <= n then -- combining diacritics (an image cell's row/column)
+            i = i + 2
+        else
+            break
+        end
+    end
+    if i > 1 then
+        local stripped = name:sub(i):match("^%s+(.*)$")
+        if stripped and stripped ~= "" then
+            name = stripped
         end
     end
     local is_dir = false

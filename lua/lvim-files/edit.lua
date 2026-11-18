@@ -130,7 +130,13 @@ local function read_spans()
     end
     for _, m in ipairs(api.nvim_buf_get_extmarks(state.buf, NS_HL, 0, -1, { details = true })) do
         local row, col, det = m[2] + 1, m[3], m[4]
-        if det and det.hl_group and det.end_col then
+        if det and det.virt_text_pos == "inline" and det.virt_text and det.virt_text[1] then
+            -- an entry's icon (virtual text): its glyph and group
+            local chunk = det.virt_text[1]
+            local hl = type(chunk[2]) == "table" and chunk[2][#chunk[2]] or chunk[2]
+            spans[row] = spans[row] or {}
+            spans[row][#spans[row] + 1] = { col, col, hl, chunk[1] }
+        elseif det and det.hl_group and det.end_col then
             spans[row] = spans[row] or {}
             spans[row][#spans[row] + 1] = { col, det.end_col, det.hl_group }
         end
@@ -217,7 +223,19 @@ local function write_buffer(lines, ids, spans)
     end
     for row, ss in pairs(spans or {}) do
         for _, s in ipairs(ss) do
-            pcall(api.nvim_buf_set_extmark, buf, NS_HL, row - 1, s[1], { end_col = s[2], hl_group = s[3] })
+            if s[4] then
+                -- the entry's icon: inline virtual text before the name. Left gravity keeps it before text
+                -- typed at column 0 (`I`); `invalidate` hides it with its line when the line is deleted.
+                pcall(api.nvim_buf_set_extmark, buf, NS_HL, row - 1, s[1], {
+                    virt_text = { { s[4], s[3] }, { " " } },
+                    virt_text_pos = "inline",
+                    right_gravity = false,
+                    invalidate = true,
+                    hl_mode = "combine",
+                })
+            else
+                pcall(api.nvim_buf_set_extmark, buf, NS_HL, row - 1, s[1], { end_col = s[2], hl_group = s[3] })
+            end
         end
     end
     vim.bo[buf].modified = false
