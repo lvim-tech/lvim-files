@@ -212,7 +212,7 @@ Edit freely, then synchronize with `:w` (or `=`):
 
 Navigation re-targets the same buffer: `l`/`<CR>` on a directory line enters
 it, `h` goes to the parent — the border title is the breadcrumb
-(`root ➤ sub ➤ dir`). Pending edits in every visited directory are kept and
+(`root 󰅂 sub 󰅂 dir`). Pending edits in every visited directory are kept and
 applied together on the next synchronize; closing with unapplied operations
 asks first.
 

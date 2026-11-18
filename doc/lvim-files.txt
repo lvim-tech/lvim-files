@@ -162,7 +162,7 @@ re-theme on `:colorscheme`.
 
 `:LvimFiles edit [dir]` opens the directory as a modifiable buffer in a
 centred float; the border title is the navigation breadcrumb
-(`root ➤ sub ➤ dir`). Each line is `icon name`; the entry identity rides a
+(`root 󰅂 sub 󰅂 dir`). Each line is `icon name`; the entry identity rides a
 hidden extmark, so the mapping survives renames, reorders and inserts.
 
 Buffer edits become operations on synchronize (`:w` or `=`):

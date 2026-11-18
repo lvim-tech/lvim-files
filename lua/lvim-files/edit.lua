@@ -151,7 +151,7 @@ local function snapshot_current()
 end
 
 --- The breadcrumb border-title for a directory: path segments from the shallowest visited
---- dir, joined with ➤ (the canonical sequence separator).
+--- dir, joined with 󰅂 (the canonical sequence separator).
 ---@param dir string
 ---@return string
 local function breadcrumb(dir)
@@ -166,7 +166,7 @@ local function breadcrumb(dir)
             segs[#segs + 1] = comp
         end
     end
-    return table.concat(segs, " ➤ ")
+    return table.concat(segs, " 󰅂 ")
 end
 
 --- Fit the breadcrumb into `avail` display cells, keeping the TAIL (the current folder) visible: a deep
@@ -459,7 +459,7 @@ local function confirm_ops(op_list)
         elseif op.kind == "delete" then
             detail = short(op.from) .. (ops.uses_trash() and "  (trash)" or "")
         else
-            detail = short(op.from) .. " ➤ " .. short(op.to)
+            detail = short(op.from) .. " 󰅂 " .. short(op.to)
         end
         if op.note then
             detail = detail .. "   " .. op.note
