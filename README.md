@@ -35,7 +35,7 @@ Requires Neovim >= 0.12, [lvim-utils](https://github.com/lvim-tech/lvim-utils)
 and [lvim-ui](https://github.com/lvim-tech/lvim-ui). Optional integrations:
 [lvim-icons](https://github.com/lvim-tech/lvim-icons) (entry icons),
 [lvim-winpick](https://github.com/lvim-tech/lvim-winpick) (open in a picked
-window), [lvim-picker](https://github.com/lvim-tech/lvim-picker) (fuzzy tree
+window), [lvim-picker](https://github.com/lvim-tech/lvim-fuzzy-picker) (fuzzy tree
 jump).
 
 ### lvim-installer (recommended)
