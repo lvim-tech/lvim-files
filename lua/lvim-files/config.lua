@@ -137,8 +137,10 @@ local M = {
         title = "LVIM FILES",
         -- Windows whose buffer is a PLACEHOLDER: opening a file REPLACES them instead of splitting beside them.
         -- The start dashboard is exactly that — a scratch buffer waiting to be replaced by whatever you pick —
-        -- so opening a file next to it (and leaving it sitting there as a second window) is never wanted.
-        reuse_filetypes = { "lvim-dashboard" },
+        -- so opening a file next to it (and leaving it sitting there as a second window) is never wanted. The same
+        -- goes for an image opened as a buffer (lvim-image's viewer): the next file replaces it, it does not split
+        -- beside the picture.
+        reuse_filetypes = { "lvim-dashboard", "lvim-image" },
         keys = {
             open = { "<CR>", "l" },
             close_node = "h",

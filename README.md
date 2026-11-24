@@ -85,8 +85,8 @@ require("lvim-files").setup({
         winpick = true,
         title = "LVIM FILES", -- the panel winbar title (false = none)
         -- Placeholder-window filetypes: a file opens INTO such a window (the start dashboard) instead of
-        -- splitting beside it.
-        reuse_filetypes = { "lvim-dashboard" },
+        -- splitting beside it (an image opened as a buffer by lvim-image is one too).
+        reuse_filetypes = { "lvim-dashboard", "lvim-image" },
         keys = {
             open = { "<CR>", "l" }, -- expand a directory / open a file
             close_node = "h", -- collapse, or jump to the parent row
